@@ -9,7 +9,10 @@ public interface IWindowsIoctlBatteryReader
 {
     bool IsSupported { get; }
     uint? LastKnownBatteryTag { get; }
-    bool WasBatteryReplaced { get; }
+    string? LastKnownSerialNumber { get; }
+    bool WasTagReinitialized { get; }
+    bool HasHardwareIdentityChanged { get; }
+    bool WasBatteryReplaced => HasHardwareIdentityChanged;
     Task<BatteryReading> ReadTelemetryAsync(CancellationToken cancellationToken = default);
     void InvalidateTagCache();
 }

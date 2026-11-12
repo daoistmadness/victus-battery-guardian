@@ -265,8 +265,14 @@ public class WindowsNativeBatteryDeviceApi : INativeBatteryDeviceApi
             if (NativeMethods.DeviceIoControl(handle, BatteryNativeConstants.IOCTL_BATTERY_QUERY_INFORMATION, inPtr, querySize, outPtr, outSize, out var bytesReturned, IntPtr.Zero) &&
                 bytesReturned > 0)
             {
-                var chars = (int)(bytesReturned / 2);
-                return Marshal.PtrToStringUni(outPtr, chars)?.TrimEnd('\0', ' ');
+                var chars = (int)Math.Min(bytesReturned / 2, outSize / 2);
+                var raw = Marshal.PtrToStringUni(outPtr, chars);
+                if (raw != null)
+                {
+                    var nullIdx = raw.IndexOf('\0');
+                    if (nullIdx >= 0) raw = raw[..nullIdx];
+                    return raw.Trim();
+                }
             }
 
             return null;

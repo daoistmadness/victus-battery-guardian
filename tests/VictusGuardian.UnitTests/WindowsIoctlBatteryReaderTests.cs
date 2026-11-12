@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 using VictusGuardian.Core.Models;
 using VictusGuardian.Windows.Native;
@@ -106,7 +107,8 @@ public class WindowsIoctlBatteryReaderTests
         var mockApi = new MockNativeBatteryDeviceApi();
         mockApi.SimulatedInfo = mockApi.SimulatedInfo with
         {
-            Capabilities = BatteryNativeConstants.BATTERY_SYSTEM_BATTERY | BatteryNativeConstants.BATTERY_CAPACITY_RELATIVE
+            Capabilities = BatteryNativeConstants.BATTERY_SYSTEM_BATTERY | BatteryNativeConstants.BATTERY_CAPACITY_RELATIVE,
+            FullChargedCapacity = 100
         };
         mockApi.SimulatedStatus = mockApi.SimulatedStatus with
         {
@@ -118,6 +120,46 @@ public class WindowsIoctlBatteryReaderTests
 
         Assert.True(reading.BatteryPercentage.IsReported);
         Assert.Equal(85.0, reading.BatteryPercentage.Value);
+    }
+
+    [Fact]
+    public async Task ReadTelemetryAsync_RelativeCapacity1000Scale_CalculatesPercentageCorrectly()
+    {
+        var mockApi = new MockNativeBatteryDeviceApi();
+        mockApi.SimulatedInfo = mockApi.SimulatedInfo with
+        {
+            Capabilities = BatteryNativeConstants.BATTERY_SYSTEM_BATTERY | BatteryNativeConstants.BATTERY_CAPACITY_RELATIVE,
+            FullChargedCapacity = 1000 // Scale in tenths of a percent
+        };
+        mockApi.SimulatedStatus = mockApi.SimulatedStatus with
+        {
+            Capacity = 854 // 85.4%
+        };
+        var reader = new WindowsIoctlBatteryReader(mockApi);
+
+        var reading = await reader.ReadTelemetryAsync();
+
+        Assert.True(reading.BatteryPercentage.IsReported);
+        Assert.Equal(85.4, reading.BatteryPercentage.Value);
+    }
+
+    [Fact]
+    public async Task ReadTelemetryAsync_OnAcPower_AtChargeThreshold_ReportsNotCharging()
+    {
+        var mockApi = new MockNativeBatteryDeviceApi();
+        // Plugged into AC, but not charging (e.g. held at 80% charge threshold)
+        mockApi.SimulatedStatus = mockApi.SimulatedStatus with
+        {
+            PowerState = BatteryNativeConstants.BATTERY_POWER_ON_LINE,
+            Capacity = 53200, // ~80% of 66500
+            Rate = 0
+        };
+        var reader = new WindowsIoctlBatteryReader(mockApi);
+
+        var reading = await reader.ReadTelemetryAsync();
+
+        Assert.Equal(AcPowerStatus.Online, reading.PowerStatus.Value);
+        Assert.Equal(BatteryChargingState.NotCharging, reading.ChargingState.Value);
     }
 
     [Fact]
@@ -150,21 +192,47 @@ public class WindowsIoctlBatteryReaderTests
     }
 
     [Fact]
-    public async Task ReadTelemetryAsync_BatteryReplacement_DetectedViaTagChange()
+    public async Task ReadTelemetryAsync_BatteryTagChanged_DetectsReinitializationWithoutFalsePhysicalReplacement()
     {
         var mockApi = new MockNativeBatteryDeviceApi();
         mockApi.NextBatteryTag = 100;
+        mockApi.SimulatedSerialNumber = "SN-VICTUS-1";
         var reader = new WindowsIoctlBatteryReader(mockApi);
 
         var firstReading = await reader.ReadTelemetryAsync();
         Assert.Equal(100u, reader.LastKnownBatteryTag);
-        Assert.False(reader.WasBatteryReplaced);
+        Assert.False(reader.WasTagReinitialized);
+        Assert.False(reader.HasHardwareIdentityChanged);
 
-        // Simulate physical battery swap (tag changes)
+        // Simulate driver/ACPI session re-initialization (tag increments, but serial number is identical)
         mockApi.NextBatteryTag = 101;
         var secondReading = await reader.ReadTelemetryAsync();
 
         Assert.Equal(101u, reader.LastKnownBatteryTag);
+        Assert.True(reader.WasTagReinitialized);
+        // Serial number did not change, so it is NOT a physical replacement
+        Assert.False(reader.HasHardwareIdentityChanged);
+        Assert.False(reader.WasBatteryReplaced);
+    }
+
+    [Fact]
+    public async Task ReadTelemetryAsync_SerialNumberChanged_DetectsHardwareIdentityChange()
+    {
+        var mockApi = new MockNativeBatteryDeviceApi();
+        mockApi.NextBatteryTag = 100;
+        mockApi.SimulatedSerialNumber = "SN-ORIGINAL-BATTERY";
+        var reader = new WindowsIoctlBatteryReader(mockApi);
+
+        await reader.ReadTelemetryAsync();
+        Assert.False(reader.HasHardwareIdentityChanged);
+
+        // Physical battery swap with different serial number
+        mockApi.NextBatteryTag = 101;
+        mockApi.SimulatedSerialNumber = "SN-REPLACEMENT-BATTERY";
+        await reader.ReadTelemetryAsync();
+
+        Assert.True(reader.WasTagReinitialized);
+        Assert.True(reader.HasHardwareIdentityChanged);
         Assert.True(reader.WasBatteryReplaced);
     }
 
@@ -192,5 +260,16 @@ public class WindowsIoctlBatteryReaderTests
         Assert.Equal(SensorCapabilities.None, reading.AvailableSensors);
         Assert.True(reading.BatteryPercentage.IsUnavailable);
         Assert.Contains("No battery device interfaces discovered", reading.TelemetryProviderSource);
+    }
+
+    [Fact]
+    public async Task ReadTelemetryAsync_CancelledToken_ThrowsOperationCanceledException()
+    {
+        var mockApi = new MockNativeBatteryDeviceApi();
+        var reader = new WindowsIoctlBatteryReader(mockApi);
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() => reader.ReadTelemetryAsync(cts.Token));
     }
 }

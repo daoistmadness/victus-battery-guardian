@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using VictusGuardian.Core.Models;
@@ -10,11 +11,16 @@ public class WindowsIoctlBatteryReader : IWindowsIoctlBatteryReader
 {
     private readonly INativeBatteryDeviceApi _nativeApi;
     private uint? _lastKnownBatteryTag;
-    private bool _wasBatteryReplaced;
+    private string? _lastKnownSerialNumber;
+    private bool _wasTagReinitialized;
+    private bool _hasHardwareIdentityChanged;
 
     public bool IsSupported => _nativeApi.IsSupported;
     public uint? LastKnownBatteryTag => _lastKnownBatteryTag;
-    public bool WasBatteryReplaced => _wasBatteryReplaced;
+    public string? LastKnownSerialNumber => _lastKnownSerialNumber;
+    public bool WasTagReinitialized => _wasTagReinitialized;
+    public bool HasHardwareIdentityChanged => _hasHardwareIdentityChanged;
+    public bool WasBatteryReplaced => HasHardwareIdentityChanged;
 
     public WindowsIoctlBatteryReader(INativeBatteryDeviceApi nativeApi)
     {
@@ -24,11 +30,15 @@ public class WindowsIoctlBatteryReader : IWindowsIoctlBatteryReader
     public void InvalidateTagCache()
     {
         _lastKnownBatteryTag = null;
-        _wasBatteryReplaced = false;
+        _lastKnownSerialNumber = null;
+        _wasTagReinitialized = false;
+        _hasHardwareIdentityChanged = false;
     }
 
     public Task<BatteryReading> ReadTelemetryAsync(CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+
         if (!_nativeApi.IsSupported)
         {
             return Task.FromResult(CreateUnsupportedReading("Windows IOCTL unsupported on this OS"));
@@ -40,22 +50,22 @@ public class WindowsIoctlBatteryReader : IWindowsIoctlBatteryReader
             return Task.FromResult(CreateUnsupportedReading("No battery device interfaces discovered"));
         }
 
+        BatteryReading? fallbackCandidate = null;
+
+        // Iterate through enumerated battery device paths.
+        // In systems with multiple batteries, prioritize BATTERY_SYSTEM_BATTERY.
         foreach (var path in devicePaths)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
             using var handle = _nativeApi.OpenBatteryDevice(path);
             if (handle.IsInvalid) continue;
 
-            if (!_nativeApi.QueryBatteryTag(handle, 0, out var tag) || tag == BatteryNativeConstants.BATTERY_TAG_INVALID)
+            // Use 2000ms timeout for query tag to prevent indefinite block if ACPI EC hangs
+            if (!_nativeApi.QueryBatteryTag(handle, 2000, out var tag) || tag == BatteryNativeConstants.BATTERY_TAG_INVALID)
             {
                 continue;
             }
-
-            // Detect battery replacement / reconnection
-            if (_lastKnownBatteryTag.HasValue && _lastKnownBatteryTag.Value != tag)
-            {
-                _wasBatteryReplaced = true;
-            }
-            _lastKnownBatteryTag = tag;
 
             var infoSuccess = _nativeApi.QueryBatteryInformation(handle, tag, out var info);
             var statusSuccess = _nativeApi.QueryBatteryStatus(handle, tag, out var status);
@@ -65,8 +75,37 @@ public class WindowsIoctlBatteryReader : IWindowsIoctlBatteryReader
                 continue;
             }
 
-            var reading = ParseBatteryReading(path, tag, handle, infoSuccess ? info : null, statusSuccess ? status : null);
-            return Task.FromResult(reading);
+            // Distinguish driver tag re-initialization (session reset) from true physical battery change
+            if (_lastKnownBatteryTag.HasValue && _lastKnownBatteryTag.Value != tag)
+            {
+                _wasTagReinitialized = true;
+            }
+            _lastKnownBatteryTag = tag;
+
+            var serial = _nativeApi.QueryBatteryString(handle, tag, BatteryQueryInformationLevel.BatterySerialNumber);
+            if (!string.IsNullOrEmpty(serial))
+            {
+                if (!string.IsNullOrEmpty(_lastKnownSerialNumber) && !string.Equals(_lastKnownSerialNumber, serial, StringComparison.OrdinalIgnoreCase))
+                {
+                    _hasHardwareIdentityChanged = true;
+                }
+                _lastKnownSerialNumber = serial;
+            }
+
+            var reading = ParseBatteryReading(path, tag, handle, infoSuccess ? info : null, statusSuccess ? status : null, serial);
+
+            // If this is identified as the system battery, return immediately
+            if (infoSuccess && (info.Capabilities & BatteryNativeConstants.BATTERY_SYSTEM_BATTERY) != 0)
+            {
+                return Task.FromResult(reading);
+            }
+
+            fallbackCandidate ??= reading;
+        }
+
+        if (fallbackCandidate != null)
+        {
+            return Task.FromResult(fallbackCandidate);
         }
 
         return Task.FromResult(CreateUnsupportedReading("Unable to query active battery on any enumerated interface"));
@@ -77,7 +116,8 @@ public class WindowsIoctlBatteryReader : IWindowsIoctlBatteryReader
         uint tag,
         SafeBatteryHandle handle,
         BATTERY_INFORMATION? info,
-        BATTERY_STATUS? status)
+        BATTERY_STATUS? status,
+        string? serialNumber)
     {
         var capabilities = SensorCapabilities.None;
 
@@ -93,7 +133,9 @@ public class WindowsIoctlBatteryReader : IWindowsIoctlBatteryReader
 
             if ((status.Value.PowerState & BatteryNativeConstants.BATTERY_CHARGING) != 0)
             {
-                chargingState = BatteryChargingState.Charging;
+                chargingState = (status.Value.PowerState & BatteryNativeConstants.BATTERY_CRITICAL) != 0
+                    ? BatteryChargingState.Critical
+                    : BatteryChargingState.Charging;
             }
             else if ((status.Value.PowerState & BatteryNativeConstants.BATTERY_DISCHARGING) != 0)
             {
@@ -103,7 +145,18 @@ public class WindowsIoctlBatteryReader : IWindowsIoctlBatteryReader
             }
             else if (isOnline)
             {
-                chargingState = BatteryChargingState.Full;
+                // On AC and not charging: distinguish full from charge-limit / idle
+                if (status.Value.Capacity != BatteryNativeConstants.BATTERY_UNKNOWN_CAPACITY &&
+                    info.HasValue && info.Value.FullChargedCapacity != BatteryNativeConstants.BATTERY_UNKNOWN_CAPACITY &&
+                    info.Value.FullChargedCapacity > 0 &&
+                    status.Value.Capacity >= (info.Value.FullChargedCapacity * 0.95))
+                {
+                    chargingState = BatteryChargingState.Full;
+                }
+                else
+                {
+                    chargingState = BatteryChargingState.NotCharging;
+                }
             }
             else
             {
@@ -140,7 +193,15 @@ public class WindowsIoctlBatteryReader : IWindowsIoctlBatteryReader
         if (isRelative && remainingCap.HasValue)
         {
             capabilities |= SensorCapabilities.Percentage;
-            percentage = TelemetryValue<double>.Reported(Math.Clamp(remainingCap.Value, 0.0, 100.0));
+            if (fullCap.HasValue && fullCap.Value > 0)
+            {
+                var pct = Math.Clamp((remainingCap.Value / fullCap.Value) * 100.0, 0.0, 100.0);
+                percentage = TelemetryValue<double>.Reported(Math.Round(pct, 1));
+            }
+            else
+            {
+                percentage = TelemetryValue<double>.Reported(Math.Clamp(remainingCap.Value, 0.0, 100.0));
+            }
         }
         else if (remainingCap.HasValue && fullCap.HasValue && fullCap.Value > 0)
         {
@@ -163,13 +224,17 @@ public class WindowsIoctlBatteryReader : IWindowsIoctlBatteryReader
         {
             capabilities |= SensorCapabilities.ChargeRate;
             double normalizedRate;
-            if (chargingState == BatteryChargingState.Charging)
+            if ((status.Value.PowerState & BatteryNativeConstants.BATTERY_CHARGING) != 0)
             {
                 normalizedRate = Math.Abs(status.Value.Rate);
             }
-            else if (chargingState == BatteryChargingState.Discharging || chargingState == BatteryChargingState.Critical)
+            else if ((status.Value.PowerState & BatteryNativeConstants.BATTERY_DISCHARGING) != 0)
             {
                 normalizedRate = -Math.Abs(status.Value.Rate);
+            }
+            else if (status.Value.Rate != 0)
+            {
+                normalizedRate = status.Value.Rate;
             }
             else
             {
@@ -190,9 +255,8 @@ public class WindowsIoctlBatteryReader : IWindowsIoctlBatteryReader
         var chemistry = info.HasValue ? TelemetryValue<string>.Reported(info.Value.GetChemistryString()) : TelemetryValue<string>.Unavailable;
         var devName = _nativeApi.QueryBatteryString(handle, tag, BatteryQueryInformationLevel.BatteryDeviceName);
         var mfgName = _nativeApi.QueryBatteryString(handle, tag, BatteryQueryInformationLevel.BatteryManufactureName);
-        var serial = _nativeApi.QueryBatteryString(handle, tag, BatteryQueryInformationLevel.BatterySerialNumber);
 
-        if (!string.IsNullOrEmpty(devName) || !string.IsNullOrEmpty(mfgName) || !string.IsNullOrEmpty(serial))
+        if (!string.IsNullOrEmpty(devName) || !string.IsNullOrEmpty(mfgName) || !string.IsNullOrEmpty(serialNumber))
         {
             capabilities |= SensorCapabilities.BatteryIdentity;
         }
@@ -212,7 +276,7 @@ public class WindowsIoctlBatteryReader : IWindowsIoctlBatteryReader
             CycleCount = cycles,
             BatteryName = !string.IsNullOrEmpty(devName) ? TelemetryValue<string>.Reported(devName) : TelemetryValue<string>.Unavailable,
             Manufacturer = !string.IsNullOrEmpty(mfgName) ? TelemetryValue<string>.Reported(mfgName) : TelemetryValue<string>.Unavailable,
-            SerialNumber = !string.IsNullOrEmpty(serial) ? TelemetryValue<string>.Reported(serial) : TelemetryValue<string>.Unavailable,
+            SerialNumber = !string.IsNullOrEmpty(serialNumber) ? TelemetryValue<string>.Reported(serialNumber) : TelemetryValue<string>.Unavailable,
             Chemistry = chemistry,
             BatteryTag = tag,
             DevicePath = devicePath,
@@ -239,6 +303,6 @@ public class WindowsIoctlBatteryReader : IWindowsIoctlBatteryReader
         SerialNumber = TelemetryValue<string>.Unavailable,
         Chemistry = TelemetryValue<string>.Unavailable,
         IsStale = false,
-        TelemetryProviderSource = reason
+        TelemetryProviderSource = $"Telemetry Unavailable: {reason}"
     };
 }
