@@ -20,10 +20,10 @@ public partial class MainWindowViewModel : ViewModelBase
     private ViewModelBase _currentView;
 
     [ObservableProperty]
-    private string _selectedSection = "Dashboard";
+    private string _selectedSection = "Overview";
 
     [ObservableProperty]
-    private string _appVersionText = "v0.2.0-beta (Milestone 2)";
+    private string _appVersionText = "v0.3.0-dev (Milestone 3)";
 
     public bool IsDemoModeActive => _compositeProvider.IsDemoModeEnabled;
 
@@ -87,7 +87,7 @@ public partial class MainWindowViewModel : ViewModelBase
 
         CurrentView = section switch
         {
-            "Dashboard" => Dashboard,
+            "Overview" or "Dashboard" => Dashboard,
             "Health" => Health,
             "Charging" => Charging,
             "History" => History,
@@ -95,7 +95,7 @@ public partial class MainWindowViewModel : ViewModelBase
             _ => Dashboard
         };
 
-        if (section == "Dashboard")
+        if (section is "Overview" or "Dashboard")
         {
             await Dashboard.RefreshTelemetryAsync();
         }

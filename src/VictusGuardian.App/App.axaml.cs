@@ -6,6 +6,7 @@ using Microsoft.Extensions.DependencyInjection;
 using VictusGuardian.App.ViewModels;
 using VictusGuardian.App.Views;
 using VictusGuardian.Core.Alerts;
+using VictusGuardian.Core.Configuration;
 using VictusGuardian.Core.Contracts;
 using VictusGuardian.Core.Health;
 using VictusGuardian.Core.Simulation;
@@ -27,7 +28,8 @@ public partial class App : Application
     {
         var services = new ServiceCollection();
 
-        // 1. Core Services
+        // 1. Core Services & Configuration
+        services.AddSingleton<ISettingsService, JsonFileSettingsService>();
         services.AddSingleton<IBatteryHealthCalculator, DefaultBatteryHealthCalculator>();
         services.AddSingleton<IBatteryAlertEvaluator, DefaultBatteryAlertEvaluator>();
         services.AddSingleton<SimulatedBatteryTelemetryProvider>();
@@ -49,6 +51,19 @@ public partial class App : Application
         services.AddSingleton<MainWindowViewModel>();
 
         Services = services.BuildServiceProvider();
+
+        // Load persistent settings
+        var settingsService = Services.GetRequiredService<ISettingsService>();
+        try
+        {
+            var loadedSettings = await settingsService.LoadSettingsAsync();
+            var composite = Services.GetRequiredService<ICompositeBatteryTelemetryProvider>();
+            composite.IsDemoModeEnabled = loadedSettings.EnableDemoMode;
+        }
+        catch (Exception)
+        {
+            // Settings load non-fatal
+        }
 
         // Initialize SQLite schema
         var storage = Services.GetRequiredService<IBatteryHistoryRepository>();
