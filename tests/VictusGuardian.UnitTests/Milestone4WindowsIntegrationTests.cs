@@ -78,7 +78,7 @@ public class Milestone4WindowsIntegrationTests
         }
         finally
         {
-            if (File.Exists(tempSettingsFile)) File.Delete(tempSettingsFile);
+            try { if (File.Exists(tempSettingsFile)) File.Delete(tempSettingsFile); } catch { }
         }
     }
 
@@ -108,7 +108,7 @@ public class Milestone4WindowsIntegrationTests
         }
         finally
         {
-            if (File.Exists(tempSettingsFile)) File.Delete(tempSettingsFile);
+            try { if (File.Exists(tempSettingsFile)) File.Delete(tempSettingsFile); } catch { }
         }
     }
 
@@ -169,7 +169,12 @@ public class Milestone4WindowsIntegrationTests
         }
         finally
         {
-            if (File.Exists(tempDb)) File.Delete(tempDb);
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            try
+            {
+                if (File.Exists(tempDb)) File.Delete(tempDb);
+            }
+            catch { }
         }
     }
 
@@ -198,7 +203,7 @@ public class Milestone4WindowsIntegrationTests
         }
         finally
         {
-            if (File.Exists(tempSettings)) File.Delete(tempSettings);
+            try { if (File.Exists(tempSettings)) File.Delete(tempSettings); } catch { }
         }
     }
 }
