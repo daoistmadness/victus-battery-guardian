@@ -36,11 +36,21 @@ Write-Host "Target Runtime:   $($packslip.targetRuntime)"
 if ($packslip.signatureStatus) {
     Write-Host "Signature Status: $($packslip.signatureStatus.status) (isSigned = $($packslip.signatureStatus.isSigned))"
     Write-Host "Signing Mechanism: $($packslip.signatureStatus.signingMechanism)"
-    if (-not $packslip.signatureStatus.isSigned) {
-        Write-Host "Note: Cryptographic signing is incomplete pending Sigstore keyless workflow integration." -ForegroundColor Yellow
-        if ($RequireSigned) {
-            throw "FATAL: Cryptographic signature is required for production publication, but manifest status is '$($packslip.signatureStatus.status)'. Silent fallback to unsigned artifacts is strictly prohibited."
+
+    if ($packslip.signatureStatus.isSigned -eq $true) {
+        # Never treat isSigned: true as proof without genuine cryptographic evidence
+        $sigFiles = @(Get-ChildItem -Path $ArtifactsDir -Filter "*packslip*.bundle")
+        $sigFiles += @(Get-ChildItem -Path $ArtifactsDir -Filter "*packslip*.sig")
+        if ($sigFiles.Count -eq 0) {
+            throw "SECURITY VIOLATION: Packslip manifest claims 'isSigned: true', but no accompanying cryptographic signature bundle (*.bundle or *.sig) was found in $ArtifactsDir. Treating unverified claims as signed is strictly prohibited."
         }
+        Write-Host "  -> Verified cryptographic signature bundle present: $($sigFiles[0].Name)"
+    }
+    elseif ($RequireSigned) {
+        throw "FATAL: Cryptographic signature is required for production publication, but manifest status is '$($packslip.signatureStatus.status)'. Silent fallback to unsigned artifacts is strictly prohibited."
+    }
+    else {
+        Write-Host "Note: Cryptographic signing is marked unsigned. Preview/development distribution only." -ForegroundColor Yellow
     }
 }
 elseif ($RequireSigned) {
@@ -68,6 +78,37 @@ foreach ($artifact in $packslip.artifacts) {
         $shaContent = Get-Content -Path $shaFile -Raw
         if (-not $shaContent.Contains($expectedHash)) {
             throw "SHA256 file $shaFile does not match expected hash!"
+        }
+    }
+
+    # Content quality audit for user zip packages
+    if ($expectedName -like "*win-x64.zip" -and -not ($expectedName -like "*diagnostics*") -and -not ($expectedName -like "*framework-dependent*")) {
+        Write-Host "Auditing package contents for $expectedName..."
+        Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+        $zip = [System.IO.Compression.ZipFile]::OpenRead($artifactPath)
+        try {
+            $entries = @($zip.Entries | ForEach-Object { $_.FullName })
+
+            # 1. Must contain required files
+            $requiredFiles = @("VictusGuardian.App.exe", "README.md", "LICENSE", "VERSION.txt")
+            foreach ($req in $requiredFiles) {
+                if ($entries -notcontains $req) {
+                    throw "Package content audit failed: $expectedName is missing required file '$req'"
+                }
+            }
+
+            # 2. Must NOT contain development or debug files
+            $forbiddenPatterns = @("*.pdb", "*.ps1", "*.sh", "*.cs")
+            foreach ($pattern in $forbiddenPatterns) {
+                $matches = @($entries | Where-Object { $_ -like $pattern })
+                if ($matches.Count -gt 0) {
+                    throw "Package content audit failed: $expectedName contains forbidden development artifact(s): $($matches -join ', ')"
+                }
+            }
+            Write-Host "  -> Content audit PASSED (contains required files, zero PDBs/scripts)"
+        }
+        finally {
+            $zip.Dispose()
         }
     }
 

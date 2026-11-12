@@ -41,16 +41,39 @@ Every packaged release produces a Packslip JSON manifest (e.g. `VictusGuardian-v
 
 ---
 
-## 2. Integrity vs. Authenticity: Why Signing Must Not Be Fabricated
+## 2. The Three-Tier Trust Model: Integrity, Provenance, and Authenticity
 
-In Milestone 1 and Milestone 2:
-- The packslip manifest verifies **integrity** (confirming that downloaded files match the bits produced during compilation via SHA-256 checksums).
-- It does **NOT** yet provide cryptographic **authenticity** or non-repudiation.
-- Describing a checksum-only manifest as "signed" is a violation of software supply chain standards. Therefore, our manifests explicitly state `isSigned: false` until keyless signing infrastructure is deployed.
+Victus Battery Guardian strictly separates and defines three distinct verification tiers:
+
+### Tier 1: SHA-256 Digest Integrity
+- **What it proves:** Bit-level data integrity against transmission corruption, truncated downloads, or accidental file mutations.
+- **What it does NOT prove:** Author identity, origin authenticity, or protection against an attacker who modified both the ZIP file and the `.sha256` text file.
+- **Guarantee:** Used as baseline hygiene across all builds.
+
+### Tier 2: Sigstore Keyless Cryptographic Provenance (SLSA Level 3)
+- **What it proves:** That the artifact bits and manifest were produced by an authorized, untampered GitHub Actions CI workflow run on the protected `main` branch of this repository.
+- **Mechanism:** Short-lived OIDC tokens issued to the GitHub Actions runner, signed by Sigstore's Fulcio CA, and recorded immutably in the Rekor transparency log.
+- **Verification Rule:** `verify-draft.ps1` strictly enforces that `isSigned: true` is **rejected** unless accompanied by a verified cryptographic bundle (`*.bundle` or `*.sig`). Blindly trusting an `isSigned: true` JSON property without cryptographic proof is strictly forbidden.
+
+### Tier 3: Windows Authenticode Executable Signing
+- **What it proves:** The Portable Executable (`VictusGuardian.App.exe`) header is signed with an X.509 certificate rooted in Microsoft's Trusted Root Certification Authorities program.
+- **User Impact:** Prevents Windows SmartScreen "Unknown Publisher" warnings and administrative execution blocks.
+- **Guarantee:** Establishes organizational identity and executable immutability on Windows 11.
 
 ---
 
-## 3. Future Keyless Signing: Sigstore & Rekor Architecture
+## 3. Channel Architecture: Preview vs. Stable Releases
+
+| Channel / Feature | Preview Release (`.github/workflows/preview-release.yml`) | Stable Release (`.github/workflows/ci-release.yml`) |
+|---|---|---|
+| **Trigger Mechanism** | Explicit manual invocation via `workflow_dispatch` only | Automated on merge to protected `main` (gated) |
+| **Prerequisites** | Successful CI run on `main` (`test-linux`, `test-windows`) | Successful CI run on `main` + `ENABLE_PRODUCTION_RELEASE=true` |
+| **Artifact Promotion** | Exact CI package reused (Zero recompilation) | Exact CI package reused (Zero recompilation) |
+| **Release Tag Format** | `v<version>-preview.<commit>` | `v<version>` |
+| **GitHub Flag** | `prerelease: true`, `latest: false` | `prerelease: false`, `latest: true` |
+| **Draft-First Gate** | Created as Draft; published only when authorized | Draft release created and validated prior to promotion |
+| **Signing Status** | Clearly labeled **Unsigned Candidate** in notes & manifest | Signature-gated (Authenticode / Sigstore verified) |
+| **Duplicate Prevention** | Rejects conflicting published tags; allows safe retry on drafts | Semantic-release detects existing tags via Git |
 
 The production release workflow (`.github/workflows/ci-release.yml`) is designed to integrate keyless signing using **Sigstore Cosign**:
 
