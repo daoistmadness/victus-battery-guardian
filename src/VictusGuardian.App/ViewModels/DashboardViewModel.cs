@@ -14,6 +14,7 @@ using VictusGuardian.Core.Health;
 using VictusGuardian.Core.Models;
 using VictusGuardian.Storage.Models;
 using VictusGuardian.Storage.Repositories;
+using VictusGuardian.App.Notifications;
 
 namespace VictusGuardian.App.ViewModels;
 
@@ -24,8 +25,25 @@ public partial class DashboardViewModel : ViewModelBase, IDisposable
     private readonly IBatteryAlertEvaluator _alertEvaluator;
     private readonly IBatteryHistoryRepository _historyRepository;
     private readonly ISettingsService _settingsService;
+    private readonly IAppNotificationCoordinator? _notificationCoordinator;
     private CancellationTokenSource? _pollingCts;
     private bool _isDisposed;
+    private bool _isWindowVisible = true;
+
+    public bool IsWindowVisible => _isWindowVisible;
+    public event Action<BatteryReading>? ReadingUpdated;
+
+    public void SetWindowVisible(bool isVisible)
+    {
+        if (_isWindowVisible != isVisible)
+        {
+            _isWindowVisible = isVisible;
+            if (isVisible)
+            {
+                _ = RefreshTelemetryAsync();
+            }
+        }
+    }
 
     [ObservableProperty]
     private double _batteryPercentage = 0.0;
@@ -106,27 +124,31 @@ public partial class DashboardViewModel : ViewModelBase, IDisposable
         IBatteryHealthCalculator healthCalculator,
         IBatteryAlertEvaluator alertEvaluator,
         IBatteryHistoryRepository historyRepository,
-        ISettingsService settingsService)
+        ISettingsService settingsService,
+        IAppNotificationCoordinator? notificationCoordinator = null)
     {
         _telemetryProvider = telemetryProvider;
         _healthCalculator = healthCalculator;
         _alertEvaluator = alertEvaluator;
         _historyRepository = historyRepository;
         _settingsService = settingsService;
+        _notificationCoordinator = notificationCoordinator;
 
         // Auto-polling is explicitly NOT started during ViewModel construction
         // to ensure the MainWindow is rendered before background work begins.
     }
 
-    public void StartAutoPolling(int intervalSeconds = 5)
+    public void StartAutoPolling(int? intervalSeconds = null)
     {
         _pollingCts?.Cancel();
         _pollingCts = new CancellationTokenSource();
         var token = _pollingCts.Token;
+        var interval = intervalSeconds ?? _settingsService.CurrentSettings.PollingIntervalSeconds;
+        interval = Math.Clamp(interval, 5, 120);
 
         _ = Task.Run(async () =>
         {
-            using var timer = new PeriodicTimer(TimeSpan.FromSeconds(Math.Max(2, intervalSeconds)));
+            using var timer = new PeriodicTimer(TimeSpan.FromSeconds(interval));
             while (!token.IsCancellationRequested)
             {
                 try
@@ -134,10 +156,17 @@ public partial class DashboardViewModel : ViewModelBase, IDisposable
                     if (!await timer.WaitForNextTickAsync(token))
                         break;
 
-                    await SafeInvokeOnUIThreadAsync(async () =>
+                    if (_isWindowVisible)
+                    {
+                        await SafeInvokeOnUIThreadAsync(async () =>
+                        {
+                            await RefreshTelemetryAsync();
+                        });
+                    }
+                    else
                     {
                         await RefreshTelemetryAsync();
-                    });
+                    }
                 }
                 catch (OperationCanceledException)
                 {
@@ -254,6 +283,9 @@ public partial class DashboardViewModel : ViewModelBase, IDisposable
             {
                 // Health tracking non-fatal
             }
+
+            // Notify status listeners / tray icon
+            ReadingUpdated?.Invoke(reading);
 
             // Update primary readings
             BatteryPercentage = reading.BatteryPercentage.HasValue
@@ -412,6 +444,15 @@ public partial class DashboardViewModel : ViewModelBase, IDisposable
             };
 
             var alerts = _alertEvaluator.Evaluate(reading, health, alertSettings);
+
+            if (_notificationCoordinator != null && alerts.Count > 0)
+            {
+                foreach (var alert in alerts)
+                {
+                    _ = _notificationCoordinator.DispatchAlertAsync(alert);
+                }
+            }
+
             ActiveAlerts.Clear();
             if (alerts.Count == 0)
             {

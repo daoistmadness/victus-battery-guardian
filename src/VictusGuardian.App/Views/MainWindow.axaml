@@ -489,7 +489,7 @@
                   <TextBlock Text="Hardware Telemetry Polling Interval:" FontSize="13" Foreground="{StaticResource TextSecondaryBrush}" />
                   <TextBlock Grid.Column="1" Text="{Binding PollingIntervalSeconds, StringFormat='{}{0} seconds'}" FontWeight="Bold" Foreground="{StaticResource AccentGreenBrush}" />
                 </Grid>
-                <Slider Minimum="2" Maximum="60" Value="{Binding PollingIntervalSeconds}" Foreground="{StaticResource AccentGreenBrush}" />
+                <Slider Minimum="5" Maximum="120" Value="{Binding PollingIntervalSeconds}" Foreground="{StaticResource AccentGreenBrush}" />
               </StackPanel>
 
               <!-- Low Battery Alert -->
@@ -520,9 +520,24 @@
                 <TextBlock Text="Advisory notification only. Victus Guardian does not modify BIOS or hardware charging controllers." FontSize="11" Foreground="{StaticResource TextMutedBrush}" />
               </StackPanel>
 
-              <!-- Notifications Toggle -->
-              <CheckBox Content="Enable System Notifications" IsChecked="{Binding EnableNotifications}"
-                        Foreground="{StaticResource TextPrimaryBrush}" FontWeight="SemiBold" />
+              <!-- Windows System Tray and Background Monitoring Settings -->
+              <Separator Background="{StaticResource CardBorderBrush}" Margin="0,4" />
+              <TextBlock Text="WINDOWS INTEGRATION &amp; TRAY PREFERENCES" FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource TextSecondaryBrush}" />
+
+              <StackPanel Spacing="8">
+                <CheckBox Content="Display System Tray Icon in Windows Notification Area" IsChecked="{Binding ShowTrayIcon}"
+                          Foreground="{StaticResource TextPrimaryBrush}" />
+                <CheckBox Content="Minimize window to System Tray instead of Taskbar" IsChecked="{Binding MinimizeToTray}"
+                          IsEnabled="{Binding ShowTrayIcon}" Foreground="{StaticResource TextPrimaryBrush}" />
+                <CheckBox Content="Close button minimizes to System Tray instead of exiting" IsChecked="{Binding CloseToTray}"
+                          IsEnabled="{Binding ShowTrayIcon}" Foreground="{StaticResource TextPrimaryBrush}" />
+                <CheckBox Content="Launch Victus Battery Guardian automatically on Windows sign-in (Current User)" IsChecked="{Binding StartAtLogin}"
+                          Foreground="{StaticResource TextPrimaryBrush}" />
+                <CheckBox Content="Start application minimized to System Tray" IsChecked="{Binding StartMinimized}"
+                          IsEnabled="{Binding ShowTrayIcon}" Foreground="{StaticResource TextPrimaryBrush}" />
+                <CheckBox Content="Enable System Notifications (Low Battery, 80% Reminder, Stale Sensor)" IsChecked="{Binding EnableNotifications}"
+                          Foreground="{StaticResource TextPrimaryBrush}" FontWeight="SemiBold" />
+              </StackPanel>
 
               <StackPanel Orientation="Horizontal" Spacing="12" Margin="0,8,0,0">
                 <Button Content="Save Settings" Command="{Binding SaveSettingsCommand}"

@@ -8,7 +8,7 @@ namespace VictusGuardian.Core.Configuration;
 
 public class AppSettings
 {
-    public int PollingIntervalSeconds { get; set; } = 5;
+    public int PollingIntervalSeconds { get; set; } = 30;
     public double LowBatteryWarningThreshold { get; set; } = 20.0;
     public double CriticalBatteryThreshold { get; set; } = 10.0;
     public double HighChargeReminderThreshold { get; set; } = 80.0;
@@ -16,6 +16,10 @@ public class AppSettings
     public bool EnableDemoMode { get; set; } = false;
     public int HistoryRetentionDays { get; set; } = 30;
     public bool StartMinimized { get; set; } = false;
+    public bool MinimizeToTray { get; set; } = false;
+    public bool CloseToTray { get; set; } = false;
+    public bool ShowTrayIcon { get; set; } = true;
+    public bool StartAtLogin { get; set; } = false;
 }
 
 public interface ISettingsService

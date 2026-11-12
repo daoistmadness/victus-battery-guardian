@@ -8,7 +8,7 @@ using VictusGuardian.Storage.Repositories;
 
 namespace VictusGuardian.App.ViewModels;
 
-public partial class HistoryViewModel : ViewModelBase
+public partial class HistoryViewModel : ViewModelBase, IDisposable
 {
     private readonly IBatteryHistoryRepository _historyRepository;
 
@@ -39,6 +39,8 @@ public partial class HistoryViewModel : ViewModelBase
     [ObservableProperty]
     private string _totalSessionsText = "0";
 
+    private CancellationTokenSource? _loadCts;
+
     public ObservableCollection<BatteryReadingRecord> RecentRecords { get; } = new();
 
     public HistoryViewModel(IBatteryHistoryRepository historyRepository)
@@ -56,6 +58,11 @@ public partial class HistoryViewModel : ViewModelBase
     [RelayCommand]
     public async Task LoadHistoryAsync()
     {
+        _loadCts?.Cancel();
+        _loadCts?.Dispose();
+        _loadCts = new CancellationTokenSource();
+        var token = _loadCts.Token;
+
         try
         {
             var period = SelectedTimeRange switch
@@ -66,19 +73,25 @@ public partial class HistoryViewModel : ViewModelBase
             };
 
             var since = DateTimeOffset.UtcNow - period;
-            var records = await _historyRepository.GetReadingsSinceAsync(since);
+
+            // Bounded queries: get total count via index scan and fetch only top 100 recent rows
+            var totalCount = await _historyRepository.GetReadingCountSinceAsync(since, token);
+            var records = await _historyRepository.GetRecentReadingsSinceAsync(since, limit: 100, token);
+
+            token.ThrowIfCancellationRequested();
 
             RecentRecords.Clear();
-            // Show newest first in UI
-            for (int i = records.Count - 1; i >= 0 && RecentRecords.Count < 100; i--)
+            foreach (var record in records)
             {
-                RecentRecords.Add(records[i]);
+                RecentRecords.Add(record);
             }
 
-            RecordCount = records.Count;
+            RecordCount = totalCount;
 
             // Load statistics
-            var stats = await _historyRepository.GetUsageStatisticsAsync(period);
+            var stats = await _historyRepository.GetUsageStatisticsAsync(period, token);
+            token.ThrowIfCancellationRequested();
+
             AverageDischargeRateText = stats.AverageDischargeRateWatts.HasValue
                 ? $"{stats.AverageDischargeRateWatts.Value:F1} W"
                 : "Insufficient discharge data";
@@ -95,6 +108,10 @@ public partial class HistoryViewModel : ViewModelBase
             StatusMessage = RecordCount > 0
                 ? $"{RecordCount} persisted telemetry records in SQLite WAL database ({SelectedTimeRange})"
                 : $"No records stored within {SelectedTimeRange}. Records will accumulate during operation.";
+        }
+        catch (OperationCanceledException)
+        {
+            // Clean cancellation of obsolete query
         }
         catch (Exception ex)
         {
@@ -116,5 +133,12 @@ public partial class HistoryViewModel : ViewModelBase
         {
             StatusMessage = $"Failed to purge history: {ex.Message}";
         }
+    }
+
+    public void Dispose()
+    {
+        _loadCts?.Cancel();
+        _loadCts?.Dispose();
+        _loadCts = null;
     }
 }

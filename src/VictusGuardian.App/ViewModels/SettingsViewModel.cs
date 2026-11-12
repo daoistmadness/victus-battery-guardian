@@ -8,6 +8,7 @@ using VictusGuardian.Core.Configuration;
 using VictusGuardian.Core.Contracts;
 using VictusGuardian.Core.Simulation;
 using VictusGuardian.Storage.Repositories;
+using VictusGuardian.Windows.Startup;
 
 namespace VictusGuardian.App.ViewModels;
 
@@ -17,12 +18,13 @@ public partial class SettingsViewModel : ViewModelBase
     private readonly ISimulatedBatteryService _simulator;
     private readonly ISettingsService _settingsService;
     private readonly IBatteryHistoryRepository _historyRepository;
+    private readonly IWindowsStartupService? _startupService;
 
     [ObservableProperty]
     private bool _isDemoMode;
 
     [ObservableProperty]
-    private int _pollingIntervalSeconds = 5;
+    private int _pollingIntervalSeconds = 30;
 
     [ObservableProperty]
     private double _lowBatteryThreshold = 20.0;
@@ -41,6 +43,18 @@ public partial class SettingsViewModel : ViewModelBase
 
     [ObservableProperty]
     private bool _startMinimized = false;
+
+    [ObservableProperty]
+    private bool _minimizeToTray = false;
+
+    [ObservableProperty]
+    private bool _closeToTray = false;
+
+    [ObservableProperty]
+    private bool _showTrayIcon = true;
+
+    [ObservableProperty]
+    private bool _startAtLogin = false;
 
     // Simulation controls (active when Demo Mode enabled)
     [ObservableProperty]
@@ -62,12 +76,14 @@ public partial class SettingsViewModel : ViewModelBase
         ICompositeBatteryTelemetryProvider compositeProvider,
         ISimulatedBatteryService simulator,
         ISettingsService settingsService,
-        IBatteryHistoryRepository historyRepository)
+        IBatteryHistoryRepository historyRepository,
+        IWindowsStartupService? startupService = null)
     {
         _compositeProvider = compositeProvider;
         _simulator = simulator;
         _settingsService = settingsService;
         _historyRepository = historyRepository;
+        _startupService = startupService;
 
         // Initialize from persistent settings
         var settings = _settingsService.CurrentSettings;
@@ -80,6 +96,10 @@ public partial class SettingsViewModel : ViewModelBase
         _compositeProvider.IsDemoModeEnabled = _isDemoMode;
         _historyRetentionDays = settings.HistoryRetentionDays;
         _startMinimized = settings.StartMinimized;
+        _minimizeToTray = settings.MinimizeToTray;
+        _closeToTray = settings.CloseToTray;
+        _showTrayIcon = settings.ShowTrayIcon;
+        _startAtLogin = _startupService != null && _startupService.IsSupported ? _startupService.IsRegistered() : settings.StartAtLogin;
 
         var appData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
         DatabasePath = Path.Combine(appData, "VictusGuardian", "battery_history.db");
@@ -112,10 +132,34 @@ public partial class SettingsViewModel : ViewModelBase
             EnableNotifications = EnableNotifications,
             EnableDemoMode = IsDemoMode,
             HistoryRetentionDays = HistoryRetentionDays,
-            StartMinimized = StartMinimized
+            StartMinimized = StartMinimized,
+            MinimizeToTray = MinimizeToTray,
+            CloseToTray = CloseToTray,
+            ShowTrayIcon = ShowTrayIcon,
+            StartAtLogin = StartAtLogin
         };
 
         await _settingsService.SaveSettingsAsync(settings);
+
+        if (_startupService != null && _startupService.IsSupported)
+        {
+            try
+            {
+                if (StartAtLogin)
+                {
+                    _startupService.Register(startMinimized: StartMinimized);
+                }
+                else
+                {
+                    _startupService.Unregister();
+                }
+            }
+            catch (Exception ex)
+            {
+                SettingsStatusMessage = $"Settings saved, but startup registration failed: {ex.Message}";
+                return;
+            }
+        }
     }
 
     [RelayCommand]
@@ -156,6 +200,11 @@ public partial class SettingsViewModel : ViewModelBase
             sb.AppendLine($"Machine Name:      {Environment.MachineName}");
             sb.AppendLine($"Demo Mode:         {IsDemoMode}");
             sb.AppendLine($"Polling Interval:  {PollingIntervalSeconds}s");
+            sb.AppendLine($"Minimize To Tray:  {MinimizeToTray}");
+            sb.AppendLine($"Close To Tray:     {CloseToTray}");
+            sb.AppendLine($"Show Tray Icon:    {ShowTrayIcon}");
+            sb.AppendLine($"Start At Sign-In:  {StartAtLogin}");
+            sb.AppendLine($"Start Minimized:   {StartMinimized}");
             sb.AppendLine($"Database Path:     {DatabasePath}");
             sb.AppendLine($"Database Exists:   {File.Exists(DatabasePath)}");
 
@@ -188,13 +237,17 @@ public partial class SettingsViewModel : ViewModelBase
     [RelayCommand]
     public void ResetDefaults()
     {
-        PollingIntervalSeconds = 5;
+        PollingIntervalSeconds = 30;
         LowBatteryThreshold = 20.0;
         CriticalBatteryThreshold = 10.0;
         HighChargeReminderThreshold = 80.0;
         EnableNotifications = true;
         HistoryRetentionDays = 30;
         StartMinimized = false;
+        MinimizeToTray = false;
+        CloseToTray = false;
+        ShowTrayIcon = true;
+        StartAtLogin = false;
 
         _simulator.ResetToDefaultVictusProfile();
         SimulatedPercentage = 78.5;
@@ -202,6 +255,6 @@ public partial class SettingsViewModel : ViewModelBase
         SimulatedDischargeRateWatts = 18.5;
 
         _ = SaveCurrentSettingsAsync();
-        SettingsStatusMessage = "Reset to default HP Victus configuration and saved.";
+        SettingsStatusMessage = "Reset to default configuration and saved.";
     }
 }

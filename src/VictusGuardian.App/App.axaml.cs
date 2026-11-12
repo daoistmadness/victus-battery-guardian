@@ -3,10 +3,13 @@ using System.Threading;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
+using Avalonia.Controls.Notifications;
 using Avalonia.Markup.Xaml;
 using Avalonia.Threading;
 using Microsoft.Extensions.DependencyInjection;
 using VictusGuardian.App.Diagnostics;
+using VictusGuardian.App.Lifecycle;
+using VictusGuardian.App.Notifications;
 using VictusGuardian.App.ViewModels;
 using VictusGuardian.App.Views;
 using VictusGuardian.Core.Alerts;
@@ -16,6 +19,9 @@ using VictusGuardian.Core.Health;
 using VictusGuardian.Core.Simulation;
 using VictusGuardian.Storage.Repositories;
 using VictusGuardian.Windows;
+using VictusGuardian.Windows.Notifications;
+using VictusGuardian.Windows.Power;
+using VictusGuardian.Windows.Startup;
 
 namespace VictusGuardian.App;
 
@@ -49,11 +55,15 @@ public partial class App : Application
             // 2. Storage Services
             services.AddSingleton<IBatteryHistoryRepository, SqliteBatteryHistoryRepository>();
 
-            // 3. Windows Services & Composite Provider (preferred IOCTL -> fallback Win32 -> unavailable)
+            // 3. Windows Services & Composite Provider
             services.AddWindowsGuardianServices();
             services.AddSingleton<IBatteryTelemetryProvider>(sp => sp.GetRequiredService<ICompositeBatteryTelemetryProvider>());
 
-            // 4. ViewModels
+            // 4. Notifications & Lifecycle
+            services.AddSingleton<IAppNotificationCoordinator, AppNotificationCoordinator>();
+            services.AddSingleton<ITrayManager, TrayManager>();
+
+            // 5. ViewModels
             services.AddSingleton<DashboardViewModel>();
             services.AddSingleton<HealthViewModel>();
             services.AddSingleton<ChargingViewModel>();
@@ -85,9 +95,54 @@ public partial class App : Application
                 desktop.MainWindow = mainWindow;
                 AppLogger.LogInfo("MainWindow assigned to ApplicationLifetime.MainWindow.");
 
-                // Explicitly call Show() to guarantee window display across all desktop life cycles
-                mainWindow.Show();
-                AppLogger.LogInfo("MainWindow.Show() called.");
+                // Initialize System Tray and Notification Coordinator
+                AppLogger.LogInfo("Initializing System Tray and Notification Coordinator...");
+                var trayManager = Services.GetRequiredService<ITrayManager>();
+                trayManager.Initialize(mainWindow, mainWindowVm);
+                mainWindowVm.Dashboard.ReadingUpdated += reading => trayManager.UpdateStatus(reading);
+
+                var notificationCoordinator = Services.GetRequiredService<IAppNotificationCoordinator>();
+                var windowNotificationManager = new WindowNotificationManager(mainWindow)
+                {
+                    Position = NotificationPosition.BottomRight,
+                    MaxItems = 3
+                };
+                notificationCoordinator.AttachNotificationManager(windowNotificationManager);
+
+                var powerEvents = Services.GetService<INativePowerEvents>();
+                if (powerEvents != null)
+                {
+                    powerEvents.PowerStateChanged += change =>
+                    {
+                        if (change == PowerStateChangeType.Resume)
+                        {
+                            AppLogger.LogInfo("System resumed from sleep. Triggering immediate battery telemetry refresh.");
+                            _ = mainWindowVm.Dashboard.RefreshTelemetryAsync();
+                        }
+                    };
+                }
+
+                // Check command line arguments for start minimized
+                bool startMinimized = false;
+                foreach (var arg in Environment.GetCommandLineArgs())
+                {
+                    if (string.Equals(arg, "--minimized", StringComparison.OrdinalIgnoreCase))
+                    {
+                        startMinimized = true;
+                        break;
+                    }
+                }
+
+                if (startMinimized && trayManager.IsTrayAvailable)
+                {
+                    AppLogger.LogInfo("Started minimized to system tray via --minimized switch.");
+                    trayManager.HideToTray();
+                }
+                else
+                {
+                    mainWindow.Show();
+                    AppLogger.LogInfo("MainWindow.Show() called.");
+                }
 
                 desktop.ShutdownRequested += (s, e) =>
                 {
@@ -99,10 +154,11 @@ public partial class App : Application
                 {
                     AppLogger.LogInfo("Application lifetime Exit event fired. Performing final cleanup.");
                     _appCts?.Cancel();
+                    trayManager.Dispose();
                 };
 
-                // Asynchronously initialize optional services without blocking or delaying window presentation
-                _ = InitializeApplicationServicesAsync(mainWindowVm, _appCts.Token);
+                // Asynchronously initialize optional services without blocking window presentation
+                _ = InitializeApplicationServicesAsync(mainWindowVm, trayManager, _appCts.Token);
             }
 
             base.OnFrameworkInitializationCompleted();
@@ -115,7 +171,7 @@ public partial class App : Application
         }
     }
 
-    private async Task InitializeApplicationServicesAsync(MainWindowViewModel mainWindowVm, CancellationToken cancellationToken)
+    private async Task InitializeApplicationServicesAsync(MainWindowViewModel mainWindowVm, ITrayManager trayManager, CancellationToken cancellationToken)
     {
         AppLogger.LogInfo("Beginning background services initialization...");
 
@@ -127,7 +183,12 @@ public partial class App : Application
             var loadedSettings = await settingsService.LoadSettingsAsync(cancellationToken);
             var composite = Services.GetRequiredService<ICompositeBatteryTelemetryProvider>();
             composite.IsDemoModeEnabled = loadedSettings.EnableDemoMode;
-            AppLogger.LogInfo($"Settings loaded successfully (DemoMode={loadedSettings.EnableDemoMode}, Interval={loadedSettings.PollingIntervalSeconds}s).");
+            AppLogger.LogInfo($"Settings loaded successfully (DemoMode={loadedSettings.EnableDemoMode}, Interval={loadedSettings.PollingIntervalSeconds}s, TrayIcon={loadedSettings.ShowTrayIcon}).");
+
+            if (loadedSettings.StartMinimized && loadedSettings.ShowTrayIcon && trayManager.IsTrayAvailable && !trayManager.IsWindowHidden)
+            {
+                trayManager.HideToTray();
+            }
         }
         catch (Exception ex)
         {
@@ -143,6 +204,15 @@ public partial class App : Application
             var storage = Services.GetRequiredService<IBatteryHistoryRepository>();
             await storage.InitializeAsync(cancellationToken);
             AppLogger.LogInfo("SQLite battery history database initialized successfully.");
+
+            // Run automated retention purge on startup
+            var settingsService = Services.GetRequiredService<ISettingsService>();
+            var retentionCutoff = DateTimeOffset.UtcNow.AddDays(-Math.Max(1, settingsService.CurrentSettings.HistoryRetentionDays));
+            var purged = await storage.PurgeOldReadingsAsync(retentionCutoff, cancellationToken);
+            if (purged > 0)
+            {
+                AppLogger.LogInfo($"Purged {purged} expired telemetry history records according to {settingsService.CurrentSettings.HistoryRetentionDays}-day retention policy.");
+            }
         }
         catch (Exception ex)
         {
@@ -203,7 +273,6 @@ public partial class App : Application
         }
         catch (InvalidOperationException)
         {
-            // Fallback for headless environments without active Dispatcher
             await action();
         }
     }
