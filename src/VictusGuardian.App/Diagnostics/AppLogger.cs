@@ -3,6 +3,7 @@ using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using VictusGuardian.Core.Configuration;
 
 namespace VictusGuardian.App.Diagnostics;
 
@@ -42,8 +43,8 @@ public static class AppLogger
                 }
                 else
                 {
-                    var baseAppDir = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-                    _logDirectory = Path.Combine(baseAppDir, "VictusGuardian", "logs");
+                    UserDataPaths.EnsureCanonicalDirectory();
+                    _logDirectory = UserDataPaths.LogsDirectory;
                 }
 
                 if (!Directory.Exists(_logDirectory))

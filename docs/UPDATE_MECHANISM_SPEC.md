@@ -14,7 +14,7 @@ Victus Battery Guardian is designed as an ultra-low-overhead, portable utility t
 1. **Zero Persistent Background Services:** No separate updater service, Windows Service, or scheduled tasks running in the background.
 2. **Client-Initiated & On-Demand:** Update checks run purely through standard HTTPS requests from within the running Avalonia process (e.g. at startup or when manually triggered by the user via Settings).
 3. **No External Server Infrastructure:** All releases, metadata, and assets are hosted directly on GitHub Releases (`https://github.com/daoistmadness/victus-battery-guardian`).
-4. **Non-Destructive Data Preservation:** User configuration (`settings.json`) and historical telemetry (`battery_history.db`) are stored in `%LOCALAPPDATA%\VictusBatteryGuardian\`, completely separated from the application binary directory.
+4. **Non-Destructive Data Preservation:** User configuration (`settings.json`) and historical telemetry (`battery_history.db`) are stored in `%LOCALAPPDATA%\VictusGuardian\`, completely separated from the application binary directory.
 5. **Fail-Closed Security:** Unverified or corrupted binaries are never executed.
 
 ---
@@ -148,8 +148,12 @@ The update process only touches files inside the application install/extraction 
 - `VERSION.txt`
 
 The user's persistent state is completely preserved:
-- `%LOCALAPPDATA%\VictusBatteryGuardian\settings.json` (Charge thresholds, poll intervals, notifications)
-- `%LOCALAPPDATA%\VictusBatteryGuardian\battery_history.db` (Historical telemetry and SQLite WAL files)
+- `%LOCALAPPDATA%\VictusGuardian\settings.json` (Charge thresholds, poll intervals, notifications)
+- `%LOCALAPPDATA%\VictusGuardian\battery_history.db` (Historical telemetry and SQLite WAL files)
+- `%LOCALAPPDATA%\VictusGuardian\logs\` (Diagnostic logs)
+- `%LOCALAPPDATA%\VictusGuardian\updates\` (Update staging and metadata)
+
+*(Note: If legacy `%LOCALAPPDATA%\VictusBatteryGuardian` exists from early prototypes, `UserDataPaths` performs a safe, transactional copy migration preserving all telemetry.)*
 
 Neither the trampoline script nor the extraction process accesses `%LOCALAPPDATA%`, preventing accidental history resets.
 

@@ -23,12 +23,14 @@ on:
         default: false
 
 concurrency:
-  group: preview-release-${{ github.workflow }}
+  group: preview-release-${{ github.workflow }}-${{ github.event.inputs.run_id }}
   cancel-in-progress: false
 
 permissions:
   contents: write
   actions: read
+  id-token: write
+  attestations: read
 
 jobs:
   promote-preview:
@@ -107,7 +109,11 @@ jobs:
 
       - name: Verify Candidate Package & Integrity (No Rebuild)
         run: |
-          pwsh -File ./scripts/verify-draft.ps1 -ArtifactsDir candidate-artifacts
+          pwsh -File ./scripts/verify-draft.ps1 \
+            -ArtifactsDir candidate-artifacts \
+            -ExpectedRepo "${{ github.repository }}" \
+            -ExpectedWorkflow "${{ github.repository }}/.github/workflows/ci-release.yml" \
+            -ExpectedCommit "${{ steps.verify_run.outputs.head_sha }}"
 
       - name: Extract Metadata & Determine Preview Tag
         id: meta
@@ -117,7 +123,7 @@ jobs:
           COMMIT_SHA="${{ steps.verify_run.outputs.head_sha }}"
           COMMIT_SHORT="${{ steps.verify_run.outputs.head_short }}"
           SUFFIX="${{ github.event.inputs.prerelease_suffix }}"
-          PREVIEW_TAG="v${VERSION}-${SUFFIX}.${COMMIT_SHORT}"
+          PREVIEW_TAG="preview-v${VERSION}.${COMMIT_SHORT}"
           RELEASE_TITLE="Victus Battery Guardian v${VERSION} Preview (${COMMIT_SHORT})"
 
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
@@ -146,7 +152,7 @@ jobs:
               echo "ERROR: Release '${PREVIEW_TAG}' already exists and is published. Duplicate conflicting release is prohibited."
               exit 1
             else
-              echo "Existing draft release found for '${PREVIEW_TAG}'. Will update assets and notes with safe retry."
+              echo "Existing draft release found for '${PREVIEW_TAG}'. Will safely verify and resume draft."
               echo "exists_draft=true" >> "$GITHUB_OUTPUT"
             fi
           else
@@ -180,18 +186,43 @@ jobs:
               --latest=false
           fi
 
-      - name: Upload Candidate Assets (Safe Retry / Clobber)
+      - name: Upload Candidate Assets (Safe Idempotent Verification)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PREVIEW_TAG: ${{ steps.meta.outputs.preview_tag }}
         run: |
-          echo "Uploading candidate assets to draft release ${PREVIEW_TAG}..."
-          gh release upload "${PREVIEW_TAG}" \
-            candidate-artifacts/*.zip \
-            candidate-artifacts/*.sha256 \
-            candidate-artifacts/*packslip.json \
-            --clobber
-          echo "Assets uploaded successfully."
+          echo "Auditing and safely uploading candidate assets to draft release ${PREVIEW_TAG}..."
+          EXISTING_ASSETS_JSON=$(gh release view "${PREVIEW_TAG}" --json assets --jq '.assets[] | {name: .name, size: .size}' 2>/dev/null || echo "")
+
+          for f in candidate-artifacts/*; do
+            [ -f "$f" ] || continue
+            fname=$(basename "$f")
+            local_hash=$(sha256sum "$f" | awk '{print $1}')
+
+            # Check if asset already exists on release
+            if echo "${EXISTING_ASSETS_JSON}" | grep -q "\"${fname}\""; then
+              echo "Asset '${fname}' already exists on release. Validating digest..."
+              tmp_dir=$(mktemp -d)
+              gh release download "${PREVIEW_TAG}" -p "${fname}" -D "${tmp_dir}"
+              remote_hash=$(sha256sum "${tmp_dir}/${fname}" | awk '{print $1}')
+              rm -rf "${tmp_dir}"
+
+              if [ "${local_hash}" = "${remote_hash}" ]; then
+                echo "  -> Checksum verified (${local_hash}). Reusing existing asset '${fname}'."
+                continue
+              else
+                echo "FATAL: Digest mismatch for existing release asset '${fname}'!"
+                echo "Expected (candidate): ${local_hash}"
+                echo "Found on release:     ${remote_hash}"
+                echo "Refusing to silently mutate or overwrite conflicting asset."
+                exit 1
+              fi
+            fi
+
+            echo "Uploading new verified candidate asset '${fname}'..."
+            gh release upload "${PREVIEW_TAG}" "$f"
+          done
+          echo "Asset verification and upload complete."
 
       - name: Finalize Publication (Gatekeeper)
         env:

@@ -48,6 +48,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      id-token: write
+      attestations: write
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -72,6 +74,27 @@ jobs:
         run: |
           pwsh -File ./scripts/package.ps1 -Version ${{ needs.version.outputs.version }} -OutputDir artifacts-ci
           pwsh -File ./scripts/verify-draft.ps1 -ArtifactsDir artifacts-ci
+
+      - name: Attest Build Provenance (Sigstore)
+        id: attest
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: 'artifacts-ci/VictusGuardian-*.zip'
+
+      - name: Export Attestation Bundle for Candidate Artifact
+        run: |
+          if [ -n "${{ steps.attest.outputs.bundle-path }}" ] && [ -f "${{ steps.attest.outputs.bundle-path }}" ]; then
+            cp "${{ steps.attest.outputs.bundle-path }}" artifacts-ci/VictusGuardian-v${{ needs.version.outputs.version }}-attestation.jsonl
+            echo "Attestation bundle exported to artifacts-ci/"
+          fi
+
+      - name: Verify Freshly Attested Candidate Provenance
+        run: |
+          pwsh -File ./scripts/verify-draft.ps1 \
+            -ArtifactsDir artifacts-ci \
+            -RequireProvenance \
+            -ExpectedRepo "${{ github.repository }}" \
+            -ExpectedWorkflow "${{ github.repository }}/.github/workflows/ci-release.yml"
 
       - name: Upload Windows x64 Validation Package (Artifact)
         uses: actions/upload-artifact@v4
@@ -142,6 +165,14 @@ jobs:
         with:
           name: victus-guardian-win-x64-validation-package
           path: candidate-artifacts
+
+      - name: Verify Provenance of Candidate Package
+        run: |
+          pwsh -File ./scripts/verify-draft.ps1 \
+            -ArtifactsDir candidate-artifacts \
+            -RequireProvenance \
+            -ExpectedRepo "${{ github.repository }}" \
+            -ExpectedWorkflow "${{ github.repository }}/.github/workflows/ci-release.yml"
 
       - name: Run Semantic Release (Promoting Immutable Candidate)
         env:

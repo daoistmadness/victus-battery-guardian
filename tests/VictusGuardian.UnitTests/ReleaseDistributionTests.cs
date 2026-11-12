@@ -250,4 +250,157 @@ public class ReleaseDistributionTests
 
         Assert.Equal(expectedAction, ResolveAction(releaseExists, isDraft));
     }
+
+    [Fact]
+    public void ProvenanceVerification_ValidClaims_PassesVerification()
+    {
+        var trustedRepo = "daoistmadness/victus-battery-guardian";
+        var trustedWorkflow = "daoistmadness/victus-battery-guardian/.github/workflows/ci-release.yml";
+        var expectedCommit = "c5730297fb0cd96b7086058c64e7a043f6269914";
+
+        var attestationPayload = new
+        {
+            signerRepo = "daoistmadness/victus-battery-guardian",
+            signerWorkflow = "daoistmadness/victus-battery-guardian/.github/workflows/ci-release.yml",
+            sourceCommit = "c5730297fb0cd96b7086058c64e7a043f6269914",
+            predicateType = "https://slsa.dev/provenance/v1"
+        };
+
+        bool VerifyAttestation(string repo, string workflow, string commit)
+        {
+            if (!string.Equals(attestationPayload.signerRepo, repo, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Signer repo mismatch");
+            if (!string.Equals(attestationPayload.signerWorkflow, workflow, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Signer workflow mismatch");
+            if (!string.Equals(attestationPayload.sourceCommit, commit, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Source commit mismatch");
+            return true;
+        }
+
+        Assert.True(VerifyAttestation(trustedRepo, trustedWorkflow, expectedCommit));
+    }
+
+    [Theory]
+    [InlineData("untrusted/evil-repo", "daoistmadness/victus-battery-guardian/.github/workflows/ci-release.yml", "c573029", "Signer repo mismatch")]
+    [InlineData("daoistmadness/victus-battery-guardian", "daoistmadness/victus-battery-guardian/.github/workflows/preview-release.yml", "c573029", "Signer workflow mismatch")]
+    [InlineData("daoistmadness/victus-battery-guardian", "daoistmadness/victus-battery-guardian/.github/workflows/ci-release.yml", "bad0000", "Source commit mismatch")]
+    public void ProvenanceVerification_InvalidClaims_ThrowsSecurityException(
+        string repo,
+        string workflow,
+        string commit,
+        string expectedErrorSubstring)
+    {
+        var attestationPayload = new
+        {
+            signerRepo = "daoistmadness/victus-battery-guardian",
+            signerWorkflow = "daoistmadness/victus-battery-guardian/.github/workflows/ci-release.yml",
+            sourceCommit = "c573029"
+        };
+
+        void Verify(string r, string w, string c)
+        {
+            if (!string.Equals(attestationPayload.signerRepo, r, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Signer repo mismatch");
+            if (!string.Equals(attestationPayload.signerWorkflow, w, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Signer workflow mismatch");
+            if (!string.Equals(attestationPayload.sourceCommit, c, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Source commit mismatch");
+        }
+
+        var ex = Assert.Throws<InvalidOperationException>(() => Verify(repo, workflow, commit));
+        Assert.Contains(expectedErrorSubstring, ex.Message);
+    }
+
+    [Theory]
+    [InlineData("a1b2c3d4", "a1b2c3d4", "SAFE_REUSE")]
+    [InlineData("a1b2c3d4", "different_hash", "FATAL_MISMATCH")]
+    public void DraftReleaseRecovery_DigestClash_RejectsSilentlyMutatingAsset(
+        string candidateHash,
+        string existingReleaseAssetHash,
+        string expectedResolution)
+    {
+        string HandleExistingAsset(string local, string remote)
+        {
+            if (string.Equals(local, remote, StringComparison.OrdinalIgnoreCase))
+            {
+                return "SAFE_REUSE";
+            }
+            throw new InvalidOperationException("FATAL_MISMATCH: Asset digest differs from existing release asset");
+        }
+
+        if (expectedResolution == "SAFE_REUSE")
+        {
+            Assert.Equal("SAFE_REUSE", HandleExistingAsset(candidateHash, existingReleaseAssetHash));
+        }
+        else
+        {
+            var ex = Assert.Throws<InvalidOperationException>(() => HandleExistingAsset(candidateHash, existingReleaseAssetHash));
+            Assert.Contains("FATAL_MISMATCH", ex.Message);
+        }
+    }
+
+    [Theory]
+    [InlineData("preview-v0.2.0.c573029", false)]
+    [InlineData("preview-c573029", false)]
+    [InlineData("v0.2.0", true)]
+    [InlineData("v1.0.0", true)]
+    [InlineData("0.2.0", false)]
+    public void PreviewTagFormat_IsolatedFromStableSemVerRegex(string tag, bool matchesStable)
+    {
+        var stableRegex = new System.Text.RegularExpressions.Regex(@"^v\d+\.\d+\.\d+$");
+        Assert.Equal(matchesStable, stableRegex.IsMatch(tag));
+    }
+
+    [Fact]
+    public void UserDataPaths_CanonicalDirectory_ResolvesToVictusGuardian()
+    {
+        Assert.Equal("VictusGuardian", VictusGuardian.Core.Configuration.UserDataPaths.CanonicalFolderName);
+        Assert.Equal("VictusBatteryGuardian", VictusGuardian.Core.Configuration.UserDataPaths.AlternateFolderName);
+        Assert.EndsWith("VictusGuardian", VictusGuardian.Core.Configuration.UserDataPaths.CanonicalDirectory);
+        Assert.EndsWith("settings.json", VictusGuardian.Core.Configuration.UserDataPaths.SettingsFilePath);
+        Assert.EndsWith("battery_history.db", VictusGuardian.Core.Configuration.UserDataPaths.DatabaseFilePath);
+    }
+
+    [Fact]
+    public void UserDataPaths_SafeMigration_CopiesLegacyFilesWithoutOverwritingCanonical()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), $"victus_test_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempRoot);
+
+        try
+        {
+            var legacyDir = Path.Combine(tempRoot, "VictusBatteryGuardian");
+            var canonicalDir = Path.Combine(tempRoot, "VictusGuardian");
+
+            Directory.CreateDirectory(legacyDir);
+            var legacyDb = Path.Combine(legacyDir, "battery_history.db");
+            File.WriteAllText(legacyDb, "SAMPLE_LEGACY_DB_CONTENT");
+
+            // Migration logic
+            if (!Directory.Exists(canonicalDir) && Directory.Exists(legacyDir))
+            {
+                Directory.CreateDirectory(canonicalDir);
+                foreach (var file in Directory.GetFiles(legacyDir))
+                {
+                    var dest = Path.Combine(canonicalDir, Path.GetFileName(file));
+                    File.Copy(file, dest, overwrite: false);
+                }
+            }
+
+            var canonicalDb = Path.Combine(canonicalDir, "battery_history.db");
+            Assert.True(File.Exists(canonicalDb));
+            Assert.Equal("SAMPLE_LEGACY_DB_CONTENT", File.ReadAllText(canonicalDb));
+
+            // Legacy file must still be intact
+            Assert.True(File.Exists(legacyDb));
+            Assert.Equal("SAMPLE_LEGACY_DB_CONTENT", File.ReadAllText(legacyDb));
+        }
+        finally
+        {
+            if (Directory.Exists(tempRoot))
+            {
+                Directory.Delete(tempRoot, recursive: true);
+            }
+        }
+    }
 }

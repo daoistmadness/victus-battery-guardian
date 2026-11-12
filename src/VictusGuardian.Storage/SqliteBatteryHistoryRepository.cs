@@ -4,6 +4,7 @@ using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Data.Sqlite;
+using VictusGuardian.Core.Configuration;
 using VictusGuardian.Core.Models;
 using VictusGuardian.Storage.Models;
 
@@ -23,14 +24,8 @@ public class SqliteBatteryHistoryRepository : IBatteryHistoryRepository
 
         if (string.IsNullOrWhiteSpace(connectionString))
         {
-            var appData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-            var folder = Path.Combine(appData, "VictusGuardian");
-            if (!Directory.Exists(folder))
-            {
-                Directory.CreateDirectory(folder);
-            }
-            var dbPath = Path.Combine(folder, "battery_history.db");
-            _connectionString = $"Data Source={dbPath}";
+            UserDataPaths.EnsureCanonicalDirectory();
+            _connectionString = $"Data Source={UserDataPaths.DatabaseFilePath}";
         }
         else
         {
