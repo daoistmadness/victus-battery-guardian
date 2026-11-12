@@ -5,6 +5,8 @@ using System.Threading;
 using System.Threading.Tasks;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Avalonia.Threading;
+using VictusGuardian.App.Diagnostics;
 using VictusGuardian.Core.Alerts;
 using VictusGuardian.Core.Configuration;
 using VictusGuardian.Core.Contracts;
@@ -112,7 +114,8 @@ public partial class DashboardViewModel : ViewModelBase, IDisposable
         _historyRepository = historyRepository;
         _settingsService = settingsService;
 
-        StartAutoPolling(_settingsService.CurrentSettings.PollingIntervalSeconds);
+        // Auto-polling is explicitly NOT started during ViewModel construction
+        // to ensure the MainWindow is rendered before background work begins.
     }
 
     public void StartAutoPolling(int intervalSeconds = 5)
@@ -124,18 +127,48 @@ public partial class DashboardViewModel : ViewModelBase, IDisposable
         _ = Task.Run(async () =>
         {
             using var timer = new PeriodicTimer(TimeSpan.FromSeconds(Math.Max(2, intervalSeconds)));
-            while (!token.IsCancellationRequested && await timer.WaitForNextTickAsync(token))
+            while (!token.IsCancellationRequested)
             {
                 try
                 {
-                    await RefreshTelemetryAsync();
+                    if (!await timer.WaitForNextTickAsync(token))
+                        break;
+
+                    await SafeInvokeOnUIThreadAsync(async () =>
+                    {
+                        await RefreshTelemetryAsync();
+                    });
                 }
-                catch
+                catch (OperationCanceledException)
                 {
-                    // Non-fatal background tick error
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    AppLogger.LogWarning($"Auto-polling tick exception: {ex.Message}");
                 }
             }
         }, token);
+    }
+
+    private static async Task SafeInvokeOnUIThreadAsync(Func<Task> action)
+    {
+        try
+        {
+            if (Dispatcher.UIThread != null && !Dispatcher.UIThread.CheckAccess())
+            {
+                await Dispatcher.UIThread.InvokeAsync(action);
+            }
+            else
+            {
+                await action();
+            }
+        }
+        catch (InvalidOperationException)
+        {
+            // Fallback for headless test environments without active Dispatcher
+            await action();
+        }
     }
 
     public void StopAutoPolling()
