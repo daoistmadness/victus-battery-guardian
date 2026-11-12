@@ -117,6 +117,9 @@ public partial class DashboardViewModel : ViewModelBase, IDisposable
     [ObservableProperty]
     private bool _isBusy = false;
 
+    private ChargingSessionRecord? _cachedActiveSession;
+    private bool _hasInitializedActiveSession = false;
+
     public ObservableCollection<string> ActiveAlerts { get; } = new();
 
     public DashboardViewModel(
@@ -230,12 +233,17 @@ public partial class DashboardViewModel : ViewModelBase, IDisposable
             // Charging Session Tracking
             try
             {
-                var activeSession = await _historyRepository.GetActiveChargingSessionAsync();
                 var isCharging = reading.ChargingState.HasValue && reading.ChargingState.Value == BatteryChargingState.Charging;
+
+                if (!_hasInitializedActiveSession)
+                {
+                    _cachedActiveSession = await _historyRepository.GetActiveChargingSessionAsync();
+                    _hasInitializedActiveSession = true;
+                }
 
                 if (isCharging)
                 {
-                    if (activeSession == null && reading.BatteryPercentage.HasValue)
+                    if (_cachedActiveSession == null && reading.BatteryPercentage.HasValue)
                     {
                         var newSession = new ChargingSessionRecord
                         {
@@ -246,14 +254,16 @@ public partial class DashboardViewModel : ViewModelBase, IDisposable
                             BatterySerialNumber = reading.SerialNumber.HasValue ? reading.SerialNumber.Value : null,
                             IsCompleted = false
                         };
-                        await _historyRepository.StartChargingSessionAsync(newSession);
+                        var id = await _historyRepository.StartChargingSessionAsync(newSession);
+                        _cachedActiveSession = newSession with { Id = id };
                     }
                 }
-                else if (activeSession != null)
+                else if (_cachedActiveSession != null)
                 {
-                    var endPct = reading.BatteryPercentage.HasValue ? reading.BatteryPercentage.Value : activeSession.StartPercentage;
+                    var endPct = reading.BatteryPercentage.HasValue ? reading.BatteryPercentage.Value : _cachedActiveSession.StartPercentage;
                     var endEnergy = reading.RemainingCapacityMwh.HasValue ? (double?)reading.RemainingCapacityMwh.Value : null;
-                    await _historyRepository.CompleteChargingSessionAsync(activeSession.Id, reading.Timestamp, endPct, endEnergy);
+                    await _historyRepository.CompleteChargingSessionAsync(_cachedActiveSession.Id, reading.Timestamp, endPct, endEnergy);
+                    _cachedActiveSession = null;
                 }
             }
             catch
@@ -432,7 +442,7 @@ public partial class DashboardViewModel : ViewModelBase, IDisposable
             }
 
             HealthPercentage = health.HealthPercentage;
-            HealthRatingText = health.Rating.ToString();
+            HealthRatingText = $"Reported Capacity Retention: {health.HealthPercentage:F0}% ({health.Rating})";
 
             // Alerts evaluation
             var alertSettings = new AlertRuleSettings
@@ -454,16 +464,21 @@ public partial class DashboardViewModel : ViewModelBase, IDisposable
             }
 
             ActiveAlerts.Clear();
-            if (alerts.Count == 0)
-            {
-                ActiveAlerts.Add("✓ Battery system operating normally. No active warnings.");
-            }
-            else
+            if (alerts.Count > 0)
             {
                 foreach (var alert in alerts)
                 {
                     ActiveAlerts.Add($"⚠ [{alert.Level}] {alert.Title}: {alert.Message}");
                 }
+            }
+            else if (reading.IsAcConnected && reading.BatteryPercentage.HasValue &&
+                     reading.BatteryPercentage.Value >= alertSettings.MaxChargeTargetPercentage)
+            {
+                ActiveAlerts.Add($"ℹ High Charge Advisory: Battery is at {reading.BatteryPercentage.Value:0}% on AC power (configured target: {alertSettings.MaxChargeTargetPercentage:0}%). Disconnecting AC adapter preserves lithium cell longevity. (Note: Victus Guardian provides advisory guidance and does not alter hardware BIOS charging limits).");
+            }
+            else
+            {
+                ActiveAlerts.Add("✓ Battery system operating normally. No active warnings.");
             }
 
             // Stale telemetry handling

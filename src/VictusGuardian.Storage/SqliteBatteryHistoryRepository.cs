@@ -44,7 +44,7 @@ public class SqliteBatteryHistoryRepository : IBatteryHistoryRepository
         await connection.OpenAsync(cancellationToken);
 
         using var pragmaCmd = connection.CreateCommand();
-        pragmaCmd.CommandText = "PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;";
+        pragmaCmd.CommandText = "PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA wal_autocheckpoint = 250;";
         await pragmaCmd.ExecuteNonQueryAsync(cancellationToken);
 
         using var versionCmd = connection.CreateCommand();
@@ -152,9 +152,19 @@ public class SqliteBatteryHistoryRepository : IBatteryHistoryRepository
                 var pctDelta = Math.Abs(_lastRecorded.Percentage - pct);
                 var acUnchanged = _lastRecorded.IsAcConnected == isAc;
                 var stateUnchanged = string.Equals(_lastRecorded.ChargingState, state, StringComparison.Ordinal);
+                var providerUnchanged = string.Equals(_lastRecorded.ProviderSource, reading.TelemetryProviderSource, StringComparison.Ordinal);
+                var simUnchanged = _lastRecorded.IsSimulated == reading.IsSimulated;
+
+                var readingVoltage = reading.VoltageMillivolts.HasValue ? reading.VoltageMillivolts.Value : (double?)null;
+                var voltageDelta = (_lastRecorded.VoltageMillivolts.HasValue && readingVoltage.HasValue)
+                    ? Math.Abs(_lastRecorded.VoltageMillivolts.Value - readingVoltage.Value)
+                    : (_lastRecorded.VoltageMillivolts.HasValue != readingVoltage.HasValue ? 1000.0 : 0.0);
+                var voltageUnchanged = voltageDelta < 250.0; // 250 mV threshold for significant electrical change
+
                 var elapsed = now - _lastRecordedAt;
 
-                if (pctDelta < 0.5 && acUnchanged && stateUnchanged && elapsed < _minIdleWriteInterval)
+                // Write suppression: skip disk write if conditions are stable and heartbeat interval has not elapsed
+                if (pctDelta < 0.5 && acUnchanged && stateUnchanged && voltageUnchanged && providerUnchanged && simUnchanged && elapsed < _minIdleWriteInterval)
                 {
                     return false;
                 }

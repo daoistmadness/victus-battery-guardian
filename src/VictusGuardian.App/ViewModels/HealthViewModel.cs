@@ -78,7 +78,7 @@ public partial class HealthViewModel : ViewModelBase
 
         HealthPercentage = health.HealthPercentage;
         WearPercentage = health.WearPercentage;
-        RatingText = health.Rating.ToString();
+        RatingText = $"Reported Capacity Retention: {health.HealthPercentage:F0}% ({health.Rating})";
         CycleCountText = health.CycleCount.HasValue ? $"{health.CycleCount.Value} cycles" : "Sensor Unavailable";
         FullChargeCapacityText = health.FullChargeCapacityMwh.HasValue ? $"{health.FullChargeCapacityMwh.Value:N0} mWh" : "Unavailable";
         DesignCapacityText = health.DesignCapacityMwh.HasValue ? $"{health.DesignCapacityMwh.Value:N0} mWh" : "Unavailable";

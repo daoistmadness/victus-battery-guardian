@@ -13,7 +13,11 @@ param (
     [string]$CandidatePackage = $null,
 
     [Parameter(Mandatory = $false)]
-    [string]$CandidateDiagnosticsPackage = $null
+    [string]$CandidateDiagnosticsPackage = $null,
+
+    [Parameter(Mandatory = $false)]
+    [ValidateSet("SelfContained", "FrameworkDependent", "Both")]
+    [string]$PublishMode = "SelfContained"
 )
 
 $ErrorActionPreference = "Stop"
@@ -22,6 +26,7 @@ Write-Host "=================================================="
 Write-Host "Victus Battery Guardian - Packaging Script"
 Write-Host "Version:           $Version"
 Write-Host "Configuration:     $Configuration"
+Write-Host "Publish Mode:      $PublishMode"
 Write-Host "Output:            $OutputDir"
 if ($CandidatePackage) {
     Write-Host "Candidate Package: $CandidatePackage (Immutable Promotion Mode)"
@@ -122,6 +127,43 @@ if ($CandidatePackage) {
     Remove-Item -Recurse -Force $buildStaging
     Remove-Item -Recurse -Force $userStaging
     Remove-Item -Recurse -Force $diagStaging
+
+    if ($PublishMode -eq "FrameworkDependent" -or $PublishMode -eq "Both") {
+        $fdStaging = Join-Path $OutputDir "staging-fd"
+        $fdUserStaging = Join-Path $OutputDir "staging-fd-user"
+
+        foreach ($dir in @($fdStaging, $fdUserStaging)) {
+            if (Test-Path $dir) { Remove-Item -Recurse -Force $dir }
+            New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        }
+
+        Write-Host "Publishing framework-dependent win-x64 binary (requires .NET 10 Desktop Runtime)..."
+        dotnet publish $projectPath `
+            -c $Configuration `
+            -r win-x64 `
+            --self-contained false `
+            -p:PublishSingleFile=true `
+            -p:EnableCompressionInSingleFile=true `
+            -p:Version=$Version `
+            -o $fdStaging
+
+        $fdExe = Join-Path $fdStaging "VictusGuardian.App.exe"
+        if (-not (Test-Path $fdExe)) {
+            throw "Framework-dependent executable not found at: $fdExe"
+        }
+
+        Copy-Item $fdExe -Destination $fdUserStaging
+        if (Test-Path "README.md") { Copy-Item "README.md" -Destination $fdUserStaging }
+        if (Test-Path "LICENSE") { Copy-Item "LICENSE" -Destination $fdUserStaging }
+
+        $fdZipFileName = "VictusGuardian-v$Version-win-x64-framework-dependent.zip"
+        $fdZipFilePath = Join-Path $OutputDir $fdZipFileName
+        Write-Host "Creating framework-dependent archive: $fdZipFilePath..."
+        Compress-Archive -Path "$fdUserStaging/*" -DestinationPath $fdZipFilePath -Force
+
+        Remove-Item -Recurse -Force $fdStaging
+        Remove-Item -Recurse -Force $fdUserStaging
+    }
 }
 
 Write-Host "Computing SHA-256 hashes..."
@@ -158,6 +200,18 @@ if ($diagHash -and (Test-Path $diagZipFilePath)) {
         fileName = $diagZipFileName
         sha256 = $diagHash
         sizeBytes = (Get-Item $diagZipFilePath).Length
+    }
+}
+
+$fdZipFileName = "VictusGuardian-v$Version-win-x64-framework-dependent.zip"
+$fdZipFilePath = Join-Path $OutputDir $fdZipFileName
+if (Test-Path $fdZipFilePath) {
+    $fdHash = (Get-FileHash -Path $fdZipFilePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    "$fdHash  $fdZipFileName" | Out-File -FilePath "$fdZipFilePath.sha256" -Encoding utf8
+    $artifactsList += [ordered]@{
+        fileName = $fdZipFileName
+        sha256 = $fdHash
+        sizeBytes = (Get-Item $fdZipFilePath).Length
     }
 }
 
