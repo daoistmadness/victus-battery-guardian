@@ -101,55 +101,71 @@ The production release workflow (`.github/workflows/ci-release.yml`) is designed
 1. **Protected Branch Requirement**:
    Production releases cannot be triggered from feature branches or forks; only protected `main`.
 2. **Release Gate Variable (`vars.ENABLE_PRODUCTION_RELEASE`)**:
-   The semantic release publishing job is gated behind the `ENABLE_PRODUCTION_RELEASE` repository variable. By default, builds run tests and local packaging validation without publishing.
-3. **Immutable Tagging**:
-   Tags are published strictly through automated semantic release using Conventional Commits.
+   The semantic release publishing job is gated behind the `ENABLE_PRODUCTION_RELEASE` repository variable. By default, builds run tests, packaging, and provenance attestation without publishing.
+3. **Immutable Tagging & Namespace Isolation**:
+   - Preview releases use the isolated namespace `preview-v<version>.<commit>` (or `preview-<commit>`).
+   - Production stable releases strictly use `v<version>`.
+   - Tooling (`get-next-version.mjs`, `git describe`) is constrained to `v[0-9]*.[0-9]*.[0-9]*`, guaranteeing preview tags never pollute SemVer bump calculations.
+4. **Idempotent Asset Uploading & Safe Recovery**:
+   - Existing draft releases can be safely retried.
+   - When an asset already exists on a draft, its SHA-256 digest is compared against the candidate package.
+   - Identical digests are safely reused without redundant re-upload.
+   - Differing digests abort immediately with a fatal security error; silent clobbering of conflicting bytes is prohibited.
 
 ---
 
-## 5. Official Packslip GitHub Action Workflow Integration
+## 5. Official GitHub Actions Artifact Attestation Integration
 
-When Sigstore keyless signing is activated in production, the workflow utilizes GitHub's OIDC tokens (`id-token: write`) alongside the official Packslip signing step:
+Milestone 5.2 utilizes official GitHub Actions artifact attestation (`actions/attest-build-provenance@v2`), binding release archives to GitHub's OIDC issuer and transparency log:
 
 ```yaml
-  release:
-    name: Semantic Release & Packslip Publishing
-    needs: [test-linux, test-windows]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.ENABLE_PRODUCTION_RELEASE == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      issues: write
-      pull-requests: write
-      id-token: write # Required for keyless Sigstore Fulcio certificate issuance
-
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+      - name: Attest Build Provenance (Sigstore)
+        id: attest
+        uses: actions/attest-build-provenance@v2
         with:
-          fetch-depth: 0
+          subject-path: 'artifacts-ci/VictusGuardian-*.zip'
 
-      - name: Publish & Package Win-x64 Release
-        run: pwsh -File ./scripts/package.ps1 -Version ${{ env.RELEASE_VERSION }}
-
-      - name: Sign Packslip with Sigstore Cosign
-        uses: sigstore/cosign-installer@v3.8.0
-
-      - name: Generate Keyless Signature
+      - name: Export Attestation Bundle for Candidate Artifact
         run: |
-          cosign sign-blob \
-            --yes \
-            --bundle artifacts/VictusGuardian-packslip.bundle \
-            artifacts/*-packslip.json
-
-      - name: Verify Signature before Release Publication
-        run: |
-          cosign verify-blob \
-            --bundle artifacts/VictusGuardian-packslip.bundle \
-            --certificate-identity "https://github.com/daoistmadness/victus-battery-guardian/.github/workflows/ci-release.yml@refs/heads/main" \
-            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-            artifacts/*-packslip.json
+          if [ -n "${{ steps.attest.outputs.bundle-path }}" ] && [ -f "${{ steps.attest.outputs.bundle-path }}" ]; then
+            cp "${{ steps.attest.outputs.bundle-path }}" artifacts-ci/VictusGuardian-v${{ needs.version.outputs.version }}-attestation.jsonl
+            echo "Attestation bundle exported to artifacts-ci/"
+          fi
 ```
+
+### Verifying Provenance with GitHub CLI:
+Operators and automated verification gates verify the candidate archive using:
+```bash
+gh attestation verify VictusGuardian-v0.2.0-win-x64.zip \
+  --repo daoistmadness/victus-battery-guardian \
+  --signer-workflow daoistmadness/victus-battery-guardian/.github/workflows/ci-release.yml \
+  --format json
+```
+Or for air-gapped / offline verification with the bundled attestation file:
+```bash
+gh attestation verify VictusGuardian-v0.2.0-win-x64.zip \
+  --bundle VictusGuardian-v0.2.0-attestation.jsonl \
+  --repo daoistmadness/victus-battery-guardian
+```
+
+---
+
+## 6. Windows Authenticode vs. Sigstore vs. SmartScreen Guidance
+
+| Security Layer | Cryptographic Mechanism | Threat Mitigated | Windows 11 SmartScreen Impact |
+|---|---|---|---|
+| **Tier 1 (SHA-256)** | Cryptographic Digest | Bit rot, incomplete downloads | None (SmartScreen does not evaluate SHA-256 alone) |
+| **Tier 2 (Sigstore / Attestation)** | GitHub OIDC + Sigstore Rekor | Supply-chain tampering, unauthorized build systems | None (Windows kernel / Defender do not check Sigstore OIDC claims) |
+| **Tier 3 (Authenticode)** | X.509 Code Signing Certificate | Impersonation, executable tampering | **Primary factor**: Builds reputation; prevents "Unknown Publisher" warnings |
+
+### Guidance for Physical Hardware Testers (HP Victus 15.6):
+Because preview candidates are signed cryptographically via Sigstore but do not yet carry an Authenticode certificate rooted in Microsoft's CA:
+1. Verify SHA-256 against `VictusGuardian-v<version>-win-x64.zip.sha256` or run `scripts/verify-draft.ps1`.
+2. Extract the portable ZIP into an unprivileged folder (e.g. `C:\Tools\VictusGuardian`).
+3. On first execution of `VictusGuardian.App.exe`, Windows SmartScreen will display:
+   > *"Windows protected your PC — Microsoft Defender SmartScreen prevented an unrecognized app from starting."*
+4. Click **"More info"**, confirm Application is `VictusGuardian.App.exe` and Publisher is `Unknown publisher`, then click **"Run anyway"**.
+5. Once launched, verify the status bar displays live Windows IOCTL battery metrics.
 
 ### Strict Signing Policy:
 > [!CAUTION]

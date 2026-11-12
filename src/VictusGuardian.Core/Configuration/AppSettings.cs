@@ -50,13 +50,8 @@ public class JsonFileSettingsService : ISettingsService
     {
         if (string.IsNullOrWhiteSpace(customPath))
         {
-            var appData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-            var folder = Path.Combine(appData, "VictusGuardian");
-            if (!Directory.Exists(folder))
-            {
-                Directory.CreateDirectory(folder);
-            }
-            _settingsFilePath = Path.Combine(folder, "settings.json");
+            UserDataPaths.EnsureCanonicalDirectory();
+            _settingsFilePath = UserDataPaths.SettingsFilePath;
         }
         else
         {

@@ -32,12 +32,17 @@ const releaseType = await analyzeCommits({
 
 let currentVersion = '0.1.0';
 try {
-  const latestTag = execSync('git describe --tags --abbrev=0 2>/dev/null', { encoding: 'utf8' }).trim();
+  // Only match stable SemVer release tags (vMAJOR.MINOR.PATCH) to prevent preview/prerelease tag pollution
+  const latestTag = execSync('git describe --tags --abbrev=0 --match "v[0-9]*.[0-9]*.[0-9]*" 2>/dev/null', { encoding: 'utf8' }).trim();
   if (latestTag) {
-    currentVersion = latestTag.replace(/^v/, '');
+    const rawVersion = latestTag.replace(/^v/, '');
+    const cleanSemver = rawVersion.split('-')[0]; // Strip any prerelease identifier
+    if (/^\d+\.\d+\.\d+$/.test(cleanSemver)) {
+      currentVersion = cleanSemver;
+    }
   }
 } catch {
-  // Use package.json default if no tags exist
+  // Use default if no matching stable tags exist
 }
 
 const [major, minor, patch] = currentVersion.split('.').map(v => parseInt(v, 10) || 0);
