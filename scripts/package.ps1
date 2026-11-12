@@ -19,9 +19,11 @@ Write-Host "Configuration: $Configuration"
 Write-Host "Output:        $OutputDir"
 Write-Host "=================================================="
 
-# Ensure output directory exists
+# Ensure output directory exists and purge stale artifacts for this version
 if (-not (Test-Path $OutputDir)) {
     New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
+} else {
+    Get-ChildItem -Path $OutputDir -Filter "VictusGuardian-v$Version*" | Remove-Item -Force
 }
 
 $projectPath = "src/VictusGuardian.App/VictusGuardian.App.csproj"

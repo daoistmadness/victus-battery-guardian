@@ -44,7 +44,7 @@ module.exports = {
     [
       '@semantic-release/exec',
       {
-        prepareCmd: 'pwsh -File ./scripts/package.ps1 -Version ${nextRelease.version} -OutputDir artifacts'
+        prepareCmd: 'pwsh -File ./scripts/package.ps1 -Version ${nextRelease.version} -OutputDir artifacts && pwsh -File ./scripts/verify-draft.ps1 -ArtifactsDir artifacts'
       }
     ],
     [

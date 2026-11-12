@@ -1,7 +1,10 @@
 [CmdletBinding()]
 param (
     [Parameter(Mandatory = $false)]
-    [string]$ArtifactsDir = "artifacts"
+    [string]$ArtifactsDir = "artifacts",
+
+    [Parameter(Mandatory = $false)]
+    [switch]$RequireSigned
 )
 
 $ErrorActionPreference = "Stop"
@@ -9,6 +12,7 @@ $ErrorActionPreference = "Stop"
 Write-Host "=================================================="
 Write-Host "Victus Battery Guardian - Draft Verification"
 Write-Host "Scanning directory: $ArtifactsDir"
+Write-Host "Require Signed:     $RequireSigned"
 Write-Host "=================================================="
 
 if (-not (Test-Path $ArtifactsDir)) {
@@ -34,7 +38,13 @@ if ($packslip.signatureStatus) {
     Write-Host "Signing Mechanism: $($packslip.signatureStatus.signingMechanism)"
     if (-not $packslip.signatureStatus.isSigned) {
         Write-Host "Note: Cryptographic signing is incomplete pending Sigstore keyless workflow integration." -ForegroundColor Yellow
+        if ($RequireSigned) {
+            throw "FATAL: Cryptographic signature is required for production publication, but manifest status is '$($packslip.signatureStatus.status)'. Silent fallback to unsigned artifacts is strictly prohibited."
+        }
     }
+}
+elseif ($RequireSigned) {
+    throw "FATAL: Release manifest missing signatureStatus block and -RequireSigned was specified."
 }
 
 foreach ($artifact in $packslip.artifacts) {
