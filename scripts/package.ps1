@@ -47,8 +47,14 @@ if (-not (Test-Path $exePath)) {
     throw "Published executable not found at: $exePath"
 }
 
-# Copy documentation and licenses
-$docsToInclude = @("README.md", "LICENSE")
+# Copy documentation, licenses, and validation tooling
+$docsToInclude = @(
+    "README.md",
+    "LICENSE",
+    "docs/HARDWARE_VALIDATION.md",
+    "docs/RELEASE_AND_PACKSLIP.md",
+    "scripts/hardware-validate.ps1"
+)
 foreach ($doc in $docsToInclude) {
     if (Test-Path $doc) {
         Copy-Item $doc -Destination $stagingDir
