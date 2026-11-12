@@ -13,10 +13,9 @@ public class SqliteBatteryHistoryRepository : IBatteryHistoryRepository
 {
     private readonly string _connectionString;
     private readonly TimeSpan _minIdleWriteInterval;
-    private readonly object _throttleLock = new();
-
     private BatteryReadingRecord? _lastRecorded;
     private DateTimeOffset _lastRecordedAt = DateTimeOffset.MinValue;
+    private readonly object _throttleLock = new();
 
     public SqliteBatteryHistoryRepository(string? connectionString = null, TimeSpan? minIdleWriteInterval = null)
     {
@@ -79,6 +78,21 @@ public class SqliteBatteryHistoryRepository : IBatteryHistoryRepository
             ";
             await createCmd.ExecuteNonQueryAsync(cancellationToken);
             await tx.CommitAsync(cancellationToken);
+            currentVersion = 1;
+        }
+
+        if (currentVersion < 2)
+        {
+            using var tx = connection.BeginTransaction();
+            using var alterCmd = connection.CreateCommand();
+            alterCmd.Transaction = tx;
+            alterCmd.CommandText = @"
+                ALTER TABLE BatteryTelemetry ADD COLUMN VoltageMillivolts REAL;
+                ALTER TABLE BatteryTelemetry ADD COLUMN ProviderSource TEXT;
+                PRAGMA user_version = 2;
+            ";
+            await alterCmd.ExecuteNonQueryAsync(cancellationToken);
+            await tx.CommitAsync(cancellationToken);
         }
     }
 
@@ -120,6 +134,8 @@ public class SqliteBatteryHistoryRepository : IBatteryHistoryRepository
             DesignCapacityMwh = reading.DesignCapacityMwh.HasValue ? reading.DesignCapacityMwh.Value : null,
             ChargeRateMilliwatts = reading.ChargeRateMilliwatts.HasValue ? reading.ChargeRateMilliwatts.Value : null,
             CycleCount = reading.CycleCount.HasValue ? reading.CycleCount.Value : null,
+            VoltageMillivolts = reading.VoltageMillivolts.HasValue ? reading.VoltageMillivolts.Value : null,
+            ProviderSource = reading.TelemetryProviderSource,
             IsSimulated = reading.IsSimulated
         };
 
@@ -131,11 +147,11 @@ public class SqliteBatteryHistoryRepository : IBatteryHistoryRepository
             INSERT INTO BatteryTelemetry (
                 Timestamp, Percentage, IsAcConnected, ChargingState,
                 RemainingCapacityMwh, FullChargeCapacityMwh, DesignCapacityMwh,
-                ChargeRateMilliwatts, CycleCount, IsSimulated
+                ChargeRateMilliwatts, CycleCount, VoltageMillivolts, ProviderSource, IsSimulated
             ) VALUES (
                 $timestamp, $percentage, $isAc, $chargingState,
                 $remCap, $fullCap, $designCap,
-                $rate, $cycle, $isSimulated
+                $rate, $cycle, $voltage, $provider, $isSimulated
             );
             SELECT last_insert_rowid();
         ";
@@ -149,6 +165,8 @@ public class SqliteBatteryHistoryRepository : IBatteryHistoryRepository
         cmd.Parameters.AddWithValue("$designCap", (object?)record.DesignCapacityMwh ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$rate", (object?)record.ChargeRateMilliwatts ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$cycle", (object?)record.CycleCount ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$voltage", (object?)record.VoltageMillivolts ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$provider", (object?)record.ProviderSource ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$isSimulated", record.IsSimulated ? 1 : 0);
 
         var insertedIdObj = await cmd.ExecuteScalarAsync(cancellationToken);
@@ -176,7 +194,7 @@ public class SqliteBatteryHistoryRepository : IBatteryHistoryRepository
         cmd.CommandText = @"
             SELECT Id, Timestamp, Percentage, IsAcConnected, ChargingState,
                    RemainingCapacityMwh, FullChargeCapacityMwh, DesignCapacityMwh,
-                   ChargeRateMilliwatts, CycleCount, IsSimulated
+                   ChargeRateMilliwatts, CycleCount, IsSimulated, VoltageMillivolts, ProviderSource
             FROM BatteryTelemetry
             ORDER BY Id DESC
             LIMIT $limit;
@@ -203,7 +221,7 @@ public class SqliteBatteryHistoryRepository : IBatteryHistoryRepository
         cmd.CommandText = @"
             SELECT Id, Timestamp, Percentage, IsAcConnected, ChargingState,
                    RemainingCapacityMwh, FullChargeCapacityMwh, DesignCapacityMwh,
-                   ChargeRateMilliwatts, CycleCount, IsSimulated
+                   ChargeRateMilliwatts, CycleCount, IsSimulated, VoltageMillivolts, ProviderSource
             FROM BatteryTelemetry
             WHERE Timestamp >= $since
             ORDER BY Id ASC;
@@ -243,6 +261,8 @@ public class SqliteBatteryHistoryRepository : IBatteryHistoryRepository
         DesignCapacityMwh = reader.IsDBNull(7) ? null : reader.GetDouble(7),
         ChargeRateMilliwatts = reader.IsDBNull(8) ? null : reader.GetDouble(8),
         CycleCount = reader.IsDBNull(9) ? null : reader.GetInt32(9),
-        IsSimulated = reader.GetInt32(10) == 1
+        IsSimulated = reader.GetInt32(10) == 1,
+        VoltageMillivolts = reader.FieldCount > 11 && !reader.IsDBNull(11) ? reader.GetDouble(11) : null,
+        ProviderSource = reader.FieldCount > 12 && !reader.IsDBNull(12) ? reader.GetString(12) : null
     };
 }
