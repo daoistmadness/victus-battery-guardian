@@ -4,21 +4,16 @@ on:
   push:
     branches:
       - main
-      - 'chore/**'
+      - chore/foundation-bootstrap
       - 'feat/**'
       - 'fix/**'
   pull_request:
     branches:
       - main
 
-permissions:
-  contents: write
-  issues: write
-  pull-requests: write
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  cancel-in-progress: true
 
 jobs:
   test-linux:
@@ -38,14 +33,20 @@ jobs:
       - name: Restore Dependencies
         run: dotnet restore VictusBatteryGuardian.slnx
 
-      - name: Build Solution (Release)
-        run: dotnet build VictusBatteryGuardian.slnx --no-restore -c Release
+      - name: Build Solution (Debug)
+        run: dotnet build VictusBatteryGuardian.slnx --no-restore -c Debug --warnaserror
 
-      - name: Run Tests
-        run: dotnet test VictusBatteryGuardian.slnx --no-build -c Release --verbosity normal
+      - name: Run Unit Tests
+        run: dotnet test VictusBatteryGuardian.slnx --no-build -c Debug --verbosity normal
+
+      - name: Verify Packaging & Packslip Integrity
+        run: |
+          pwsh -File ./scripts/package.ps1 -Version 0.2.0-ci -OutputDir artifacts-test
+          pwsh -File ./scripts/verify-draft.ps1 -ArtifactsDir artifacts-test
+          rm -rf artifacts-test
 
   test-windows:
-    name: Build & Test (Windows 11 Runner)
+    name: Build & Test (Windows Server)
     runs-on: windows-latest
     steps:
       - name: Checkout Code
@@ -68,10 +69,16 @@ jobs:
         run: dotnet test VictusBatteryGuardian.slnx --no-build -c Release --verbosity normal
 
   release:
-    name: Semantic Release & Packslip Verification
+    name: Semantic Release & Packslip Publishing
     needs: [test-linux, test-windows]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # Releases require protected main branch and explicit administrator authorization via repo variable
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.ENABLE_PRODUCTION_RELEASE == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+      id-token: write # Required for keyless Sigstore OIDC cosign signing
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -99,7 +106,7 @@ jobs:
           pwsh -File ./scripts/verify-draft.ps1 -ArtifactsDir artifacts-ci
           rm -rf artifacts-ci
 
-      - name: Run Semantic Release (Draft Mode)
+      - name: Run Semantic Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npx semantic-release

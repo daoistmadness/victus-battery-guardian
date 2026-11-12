@@ -24,10 +24,18 @@ $packslipFile = $packslipFiles[0]
 Write-Host "Loading packslip: $($packslipFile.FullName)"
 $packslip = Get-Content -Path $packslipFile.FullName -Raw | ConvertFrom-Json
 
-Write-Host "Product:        $($packslip.product)"
-Write-Host "Version:        $($packslip.version)"
-Write-Host "Commit:         $($packslip.commit)"
-Write-Host "Target Runtime: $($packslip.targetRuntime)"
+Write-Host "Product:          $($packslip.product)"
+Write-Host "Version:          $($packslip.version)"
+Write-Host "Commit:           $($packslip.commit)"
+Write-Host "Target Runtime:   $($packslip.targetRuntime)"
+
+if ($packslip.signatureStatus) {
+    Write-Host "Signature Status: $($packslip.signatureStatus.status) (isSigned = $($packslip.signatureStatus.isSigned))"
+    Write-Host "Signing Mechanism: $($packslip.signatureStatus.signingMechanism)"
+    if (-not $packslip.signatureStatus.isSigned) {
+        Write-Host "Note: Cryptographic signing is incomplete pending Sigstore keyless workflow integration." -ForegroundColor Yellow
+    }
+}
 
 foreach ($artifact in $packslip.artifacts) {
     $expectedName = $artifact.fileName
