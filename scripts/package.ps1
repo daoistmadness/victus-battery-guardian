@@ -7,67 +7,88 @@ param (
     [string]$Configuration = "Release",
 
     [Parameter(Mandatory = $false)]
-    [string]$OutputDir = "artifacts"
+    [string]$OutputDir = "artifacts",
+
+    [Parameter(Mandatory = $false)]
+    [string]$CandidatePackage = $null
 )
 
 $ErrorActionPreference = "Stop"
 
 Write-Host "=================================================="
 Write-Host "Victus Battery Guardian - Packaging Script"
-Write-Host "Version:       $Version"
-Write-Host "Configuration: $Configuration"
-Write-Host "Output:        $OutputDir"
+Write-Host "Version:           $Version"
+Write-Host "Configuration:     $Configuration"
+Write-Host "Output:            $OutputDir"
+if ($CandidatePackage) {
+    Write-Host "Candidate Package: $CandidatePackage (Immutable Promotion Mode)"
+}
 Write-Host "=================================================="
 
 # Ensure output directory exists and purge stale artifacts for this version
 if (-not (Test-Path $OutputDir)) {
     New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
-} else {
-    Get-ChildItem -Path $OutputDir -Filter "VictusGuardian-v$Version*" | Remove-Item -Force
-}
-
-$projectPath = "src/VictusGuardian.App/VictusGuardian.App.csproj"
-$stagingDir = Join-Path $OutputDir "staging"
-
-if (Test-Path $stagingDir) {
-    Remove-Item -Recurse -Force $stagingDir
-}
-
-Write-Host "Publishing self-contained win-x64 binary..."
-dotnet publish $projectPath `
-    -c $Configuration `
-    -r win-x64 `
-    --self-contained true `
-    -p:PublishSingleFile=true `
-    -p:IncludeNativeLibrariesForSelfExtract=true `
-    -p:EnableCompressionInSingleFile=true `
-    -p:Version=$Version `
-    -o $stagingDir
-
-$exePath = Join-Path $stagingDir "VictusGuardian.App.exe"
-if (-not (Test-Path $exePath)) {
-    throw "Published executable not found at: $exePath"
-}
-
-# Copy documentation, licenses, and validation tooling
-$docsToInclude = @(
-    "README.md",
-    "LICENSE",
-    "docs/HARDWARE_VALIDATION.md",
-    "docs/RELEASE_AND_PACKSLIP.md",
-    "scripts/hardware-validate.ps1"
-)
-foreach ($doc in $docsToInclude) {
-    if (Test-Path $doc) {
-        Copy-Item $doc -Destination $stagingDir
-    }
 }
 
 $zipFileName = "VictusGuardian-v$Version-win-x64.zip"
 $zipFilePath = Join-Path $OutputDir $zipFileName
 
-Write-Host "Creating release archive: $zipFilePath..."
-Compress-Archive -Path "$stagingDir/*" -DestinationPath $zipFilePath -Force
+if ($CandidatePackage) {
+    if (-not (Test-Path $CandidatePackage)) {
+        throw "Candidate package not found at: $CandidatePackage"
+    }
+
+    Write-Host "Reusing pre-built candidate package without recompilation: $CandidatePackage"
+    if ((Resolve-Path $CandidatePackage).Path -ne (Resolve-Path $zipFilePath -ErrorAction SilentlyContinue).Path) {
+        Copy-Item -Path $CandidatePackage -Destination $zipFilePath -Force
+    }
+} else {
+    # Purge stale artifacts for this version when doing a fresh compilation
+    Get-ChildItem -Path $OutputDir -Filter "VictusGuardian-v$Version*" | Remove-Item -Force
+
+    $projectPath = "src/VictusGuardian.App/VictusGuardian.App.csproj"
+    $stagingDir = Join-Path $OutputDir "staging"
+
+    if (Test-Path $stagingDir) {
+        Remove-Item -Recurse -Force $stagingDir
+    }
+
+    Write-Host "Publishing self-contained win-x64 binary..."
+    dotnet publish $projectPath `
+        -c $Configuration `
+        -r win-x64 `
+        --self-contained true `
+        -p:PublishSingleFile=true `
+        -p:IncludeNativeLibrariesForSelfExtract=true `
+        -p:EnableCompressionInSingleFile=true `
+        -p:Version=$Version `
+        -o $stagingDir
+
+    $exePath = Join-Path $stagingDir "VictusGuardian.App.exe"
+    if (-not (Test-Path $exePath)) {
+        throw "Published executable not found at: $exePath"
+    }
+
+    # Copy documentation, licenses, and validation tooling
+    $docsToInclude = @(
+        "README.md",
+        "LICENSE",
+        "docs/HARDWARE_VALIDATION.md",
+        "docs/RELEASE_AND_PACKSLIP.md",
+        "scripts/hardware-validate.ps1"
+    )
+    foreach ($doc in $docsToInclude) {
+        if (Test-Path $doc) {
+            Copy-Item $doc -Destination $stagingDir
+        }
+    }
+
+    Write-Host "Creating release archive: $zipFilePath..."
+    Compress-Archive -Path "$stagingDir/*" -DestinationPath $zipFilePath -Force
+
+    # Cleanup staging
+    Remove-Item -Recurse -Force $stagingDir
+}
 
 Write-Host "Computing SHA-256 hash..."
 $fileHash = (Get-FileHash -Path $zipFilePath -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -109,9 +130,6 @@ $packslip = [ordered]@{
 
 $packslipPath = Join-Path $OutputDir "VictusGuardian-v$Version-packslip.json"
 $packslip | ConvertTo-Json -Depth 5 | Out-File -FilePath $packslipPath -Encoding utf8
-
-# Cleanup staging
-Remove-Item -Recurse -Force $stagingDir
 
 Write-Host "Packaging completed successfully!"
 Write-Host "Packslip generated at: $packslipPath"
