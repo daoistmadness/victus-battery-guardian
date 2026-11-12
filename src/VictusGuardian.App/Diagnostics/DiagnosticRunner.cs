@@ -45,9 +45,12 @@ public static class DiagnosticRunner
         var powerEvents = new WindowsPowerEventNotifier();
         using var composite = new CompositeBatteryTelemetryProvider(ioctlReader, powerReader, simProvider, powerEvents);
 
-        var version = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.2.0-beta";
-        var commitSha = Assembly.GetExecutingAssembly()
-            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "unknown";
+        var version = AppVersion.FullVersion;
+        var commitSha = AppVersion.CommitSha;
+        var isSoftware = Program.IsSoftwareRenderingRequested(args);
+        var renderingMode = isSoftware
+            ? "Software Rendering (Win32RenderingMode.Software, RedirectionSurface)"
+            : "Hardware Accelerated (Win32RenderingMode.AngleEgl / Direct3D)";
 
         var reading = await composite.GetReadingAsync();
 
@@ -71,6 +74,7 @@ public static class DiagnosticRunner
             Architecture = RuntimeInformation.OSArchitecture.ToString(),
             TimestampUtc = DateTimeOffset.UtcNow.ToString("o"),
             ActiveProviderTier = composite.ActiveProviderTier,
+            RenderingMode = renderingMode,
             IsDemoMode = composite.IsDemoModeEnabled,
             IsHardwareSupported = composite.IsHardwareSupported,
             IsStale = reading.IsStale,
@@ -154,6 +158,7 @@ public static class DiagnosticRunner
         Console.WriteLine($" OS:               {r.OperatingSystem} ({r.Architecture})");
         Console.WriteLine($" Timestamp (UTC):  {r.TimestampUtc}");
         Console.WriteLine($" Telemetry Tier:   {r.ActiveProviderTier}");
+        Console.WriteLine($" Rendering Backend: {r.RenderingMode}");
         Console.WriteLine($" Telemetry Source: {r.TelemetrySource}");
         Console.WriteLine($" Demo Mode:        {(r.IsDemoMode ? "ENABLED (Simulated)" : "DISABLED (Live Hardware)")}");
         Console.WriteLine($" Data Staleness:   {(r.IsStale ? "WARNING: Reading is stale" : "Fresh")}");
@@ -194,6 +199,7 @@ public class DiagnosticReport
     public string Architecture { get; set; } = "";
     public string TimestampUtc { get; set; } = "";
     public string ActiveProviderTier { get; set; } = "";
+    public string RenderingMode { get; set; } = "";
     public bool IsDemoMode { get; set; }
     public bool IsHardwareSupported { get; set; }
     public bool IsStale { get; set; }

@@ -10,7 +10,7 @@ using VictusGuardian.App.Lifecycle;
 
 namespace VictusGuardian.App;
 
-internal sealed class Program
+public class Program
 {
     [STAThread]
     public static int Main(string[] args)
@@ -69,7 +69,7 @@ internal sealed class Program
         try
         {
             AppLogger.LogInfo("Starting Avalonia desktop application lifetime...");
-            var exitCode = BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
+            var exitCode = BuildAvaloniaApp(args).StartWithClassicDesktopLifetime(args);
             AppLogger.LogInfo($"Avalonia application lifetime terminated normally with exit code {exitCode}.");
             return exitCode;
         }
@@ -84,9 +84,71 @@ internal sealed class Program
         }
     }
 
+    public static bool IsSoftwareRenderingRequested(string[]? args = null)
+    {
+        args ??= Environment.GetCommandLineArgs();
+
+        if (args.Any(arg => arg.Equals("--software-rendering", StringComparison.OrdinalIgnoreCase) ||
+                            arg.Equals("--software", StringComparison.OrdinalIgnoreCase) ||
+                            arg.Equals("--render-mode=software", StringComparison.OrdinalIgnoreCase)))
+        {
+            return true;
+        }
+
+        for (var i = 0; i < args.Length - 1; i++)
+        {
+            if (args[i].Equals("--render-mode", StringComparison.OrdinalIgnoreCase) &&
+                args[i + 1].Equals("software", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        var envRenderMode = Environment.GetEnvironmentVariable("VICTUS_RENDER_MODE");
+        if (string.Equals(envRenderMode, "software", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        var envSoftware = Environment.GetEnvironmentVariable("VICTUS_SOFTWARE_RENDERING");
+        return envSoftware == "1" || string.Equals(envSoftware, "true", StringComparison.OrdinalIgnoreCase);
+    }
+
     public static AppBuilder BuildAvaloniaApp()
-        => AppBuilder.Configure<App>()
+        => BuildAvaloniaApp(Environment.GetCommandLineArgs());
+
+    public static AppBuilder BuildAvaloniaApp(string[] args)
+    {
+        var softwareRendering = IsSoftwareRenderingRequested(args);
+        AppLogger.LogInfo(softwareRendering
+            ? "Rendering configuration: Software Rendering enabled (Win32RenderingMode.Software, Win32CompositionMode.RedirectionSurface)."
+            : "Rendering configuration: Default Hardware Rendering (Win32RenderingMode.AngleEgl with Software fallback).");
+
+        var builder = AppBuilder.Configure<App>()
             .UsePlatformDetect()
             .WithInterFont()
             .LogToTrace();
+
+        if (OperatingSystem.IsWindows())
+        {
+            if (softwareRendering)
+            {
+                builder.With(new Win32PlatformOptions
+                {
+                    RenderingMode = [Win32RenderingMode.Software],
+                    CompositionMode = [Win32CompositionMode.RedirectionSurface]
+                });
+            }
+            else
+            {
+                builder.With(new Win32PlatformOptions
+                {
+                    RenderingMode = [Win32RenderingMode.AngleEgl, Win32RenderingMode.Software],
+                    CompositionMode = [Win32CompositionMode.WinUIComposition, Win32CompositionMode.DirectComposition, Win32CompositionMode.RedirectionSurface]
+                });
+            }
+        }
+
+        return builder;
+    }
 }

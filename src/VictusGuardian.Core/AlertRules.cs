@@ -149,14 +149,14 @@ public class DefaultBatteryAlertEvaluator : IBatteryAlertEvaluator
             // High Charge Target (Advisory Reminder Only - does not stop charging)
             else if (settings.NotifyAtMaxChargeTarget &&
                      pct >= settings.MaxChargeTargetPercentage &&
-                     reading.ChargingState.Value == BatteryChargingState.Charging)
+                     reading.IsAcConnected)
             {
                 if (_highChargeArmed && CanFire(BatteryAlertCategory.HighChargeReminder, now, settings.AlertCooldown))
                 {
                     alerts.Add(new BatteryAlert(
                         BatteryAlertLevel.Info,
-                        "Target Charge Reached (80%)",
-                        $"Battery has reached {pct:0}%. Disconnecting AC power preserves lithium longevity. (Note: Victus Guardian does not modify BIOS or hardware charging behavior).",
+                        $"Target Charge Reached ({settings.MaxChargeTargetPercentage:0}%)",
+                        $"Battery is at {pct:0}% while connected to AC power. Disconnecting AC preserves lithium longevity. (Note: Victus Guardian provides advisory guidance and does not modify BIOS or hardware charging behavior).",
                         now,
                         BatteryAlertCategory.HighChargeReminder));
                     RecordFired(BatteryAlertCategory.HighChargeReminder, now);

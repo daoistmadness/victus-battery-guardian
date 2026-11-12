@@ -23,7 +23,7 @@ public partial class MainWindowViewModel : ViewModelBase
     private string _selectedSection = "Overview";
 
     [ObservableProperty]
-    private string _appVersionText = $"v{Diagnostics.AppVersion.DisplayVersion} (Milestone 3 Hotfix)";
+    private string _appVersionText = $"v{Diagnostics.AppVersion.DisplayVersion}";
 
     public bool IsDemoModeActive => _compositeProvider.IsDemoModeEnabled;
 

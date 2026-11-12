@@ -17,6 +17,11 @@ public record BatteryReadingRecord
     public double? VoltageMillivolts { get; init; }
     public string? ProviderSource { get; init; }
     public required bool IsSimulated { get; init; }
+
+    public DateTime LocalTimestamp => Timestamp.ToLocalTime().DateTime;
+    public string LocalTimestampText => Timestamp.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss");
+    public double? VoltageVolts => VoltageMillivolts.HasValue ? VoltageMillivolts.Value / 1000.0 : null;
+    public string FormattedVoltage => VoltageMillivolts.HasValue ? $"{VoltageMillivolts.Value / 1000.0:F2} V" : "—";
 }
 
 public record ChargingSessionRecord
@@ -33,6 +38,19 @@ public record ChargingSessionRecord
     public string? ProviderSource { get; init; }
     public string? BatterySerialNumber { get; init; }
     public bool IsCompleted { get; init; }
+
+    public string LocalStartTimeText => StartTime.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
+    public string FormattedStartPercentage => $"From {StartPercentage:F0}%";
+    public string FormattedEndPercentage => IsCompleted && EndPercentage.HasValue
+        ? $"To {EndPercentage.Value:F0}%"
+        : "(Active)";
+    public string FormattedDuration => DurationMinutes.HasValue
+        ? $"{DurationMinutes.Value:F0} min"
+        : "In Progress";
+    public string FormattedEnergyGained => EnergyGainedMwh.HasValue
+        ? $"+{EnergyGainedMwh.Value:N0} mWh"
+        : (IsCompleted ? "0 mWh" : "—");
+    public string StatusBadge => IsCompleted ? "Completed" : "Active";
 }
 
 public record BatteryHealthRecord
@@ -45,6 +63,8 @@ public record BatteryHealthRecord
     public string? BatterySerialNumber { get; init; }
     public string? BatteryName { get; init; }
     public string? Chemistry { get; init; }
+
+    public string LocalTimestampText => Timestamp.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
 }
 
 public record BatteryUsageStats

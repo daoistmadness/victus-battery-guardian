@@ -87,9 +87,9 @@
                              FontSize="48" FontWeight="Bold"
                              Foreground="{StaticResource AccentCyanBrush}" />
                   <StackPanel VerticalAlignment="Center" Spacing="2">
-                    <TextBlock Text="{Binding HealthRatingText}" FontSize="16" FontWeight="SemiBold"
-                               Foreground="{StaticResource TextPrimaryBrush}" />
-                    <TextBlock Text="Lithium Retention Rating" FontSize="13"
+                    <TextBlock Text="{Binding HealthRatingText}" FontSize="14" FontWeight="SemiBold"
+                               Foreground="{StaticResource TextPrimaryBrush}" TextWrapping="Wrap" />
+                    <TextBlock Text="Firmware Capacity Retention" FontSize="12"
                                Foreground="{StaticResource TextSecondaryBrush}" />
                   </StackPanel>
                 </StackPanel>
@@ -254,7 +254,7 @@
                     <Border Background="#151C28" BorderBrush="{StaticResource CardBorderBrush}"
                             BorderThickness="1" CornerRadius="4" Padding="12,8" Margin="0,3">
                       <Grid ColumnDefinitions="150, 140, 140, 90, *">
-                        <TextBlock Grid.Column="0" Text="{Binding Timestamp, StringFormat={}{0:yyyy-MM-dd HH:mm}}"
+                        <TextBlock Grid.Column="0" Text="{Binding LocalTimestampText}"
                                    FontSize="11" Foreground="{StaticResource TextMutedBrush}" VerticalAlignment="Center" />
                         <TextBlock Grid.Column="1" Text="{Binding FullChargeCapacityMwh, StringFormat='Full: {0:N0} mWh'}"
                                    FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" VerticalAlignment="Center" />
@@ -342,15 +342,15 @@
                     <Border Background="#151C28" BorderBrush="{StaticResource CardBorderBrush}"
                             BorderThickness="1" CornerRadius="4" Padding="12,8" Margin="0,3">
                       <Grid ColumnDefinitions="140, 90, 90, 110, 110, *">
-                        <TextBlock Grid.Column="0" Text="{Binding StartTime, StringFormat={}{0:yyyy-MM-dd HH:mm}}"
+                        <TextBlock Grid.Column="0" Text="{Binding LocalStartTimeText}"
                                    FontSize="11" Foreground="{StaticResource TextMutedBrush}" VerticalAlignment="Center" />
-                        <TextBlock Grid.Column="1" Text="{Binding StartPercentage, StringFormat='From {0:F0}%'}"
+                        <TextBlock Grid.Column="1" Text="{Binding FormattedStartPercentage}"
                                    FontSize="11" Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Center" />
-                        <TextBlock Grid.Column="2" Text="{Binding EndPercentage, StringFormat='To {0:F0}%'}"
+                        <TextBlock Grid.Column="2" Text="{Binding FormattedEndPercentage}"
                                    FontWeight="SemiBold" Foreground="{StaticResource AccentGreenBrush}" VerticalAlignment="Center" />
-                        <TextBlock Grid.Column="3" Text="{Binding DurationMinutes, StringFormat='{}{0:F0} min'}"
+                        <TextBlock Grid.Column="3" Text="{Binding FormattedDuration}"
                                    FontSize="11" Foreground="{StaticResource TextPrimaryBrush}" VerticalAlignment="Center" />
-                        <TextBlock Grid.Column="4" Text="{Binding EnergyGainedMwh, StringFormat='+{0:N0} mWh'}"
+                        <TextBlock Grid.Column="4" Text="{Binding FormattedEnergyGained}"
                                    FontSize="11" Foreground="{StaticResource AccentGreenBrush}" VerticalAlignment="Center" />
                         <TextBlock Grid.Column="5" Text="{Binding ProviderSource}"
                                    FontSize="10" Foreground="{StaticResource TextMutedBrush}" HorizontalAlignment="Right" VerticalAlignment="Center" />
@@ -442,7 +442,7 @@
                     <Border Background="#151C28" BorderBrush="{StaticResource CardBorderBrush}"
                             BorderThickness="1" CornerRadius="4" Padding="12,8" Margin="0,3">
                       <Grid ColumnDefinitions="140, 60, 100, 80, 80, 80, *">
-                        <TextBlock Grid.Column="0" Text="{Binding Timestamp, StringFormat={}{0:yyyy-MM-dd HH:mm:ss}}"
+                        <TextBlock Grid.Column="0" Text="{Binding LocalTimestampText}"
                                    FontSize="11" Foreground="{StaticResource TextMutedBrush}" VerticalAlignment="Center" />
                         <TextBlock Grid.Column="1" Text="{Binding Percentage, StringFormat={}{0:F0}%}"
                                    FontWeight="Bold" Foreground="{StaticResource TextPrimaryBrush}" VerticalAlignment="Center" />
@@ -452,7 +452,7 @@
                                    FontSize="11" Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Center" />
                         <TextBlock Grid.Column="4" Text="{Binding ChargeRateMilliwatts, StringFormat='{}{0:N0} mW'}"
                                    FontSize="11" Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Center" />
-                        <TextBlock Grid.Column="5" Text="{Binding VoltageMillivolts, StringFormat='{}{0:N0} mV'}"
+                        <TextBlock Grid.Column="5" Text="{Binding FormattedVoltage}"
                                    FontSize="11" Foreground="{StaticResource TextMutedBrush}" VerticalAlignment="Center" />
                         <TextBlock Grid.Column="6" Text="{Binding ProviderSource}"
                                    FontSize="10" Foreground="{StaticResource TextMutedBrush}" HorizontalAlignment="Right" VerticalAlignment="Center" />
