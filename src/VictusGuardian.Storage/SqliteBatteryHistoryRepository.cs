@@ -43,7 +43,6 @@ public class SqliteBatteryHistoryRepository : IBatteryHistoryRepository
         await using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
 
-        // Configure WAL journal mode and normal synchronous for lightweight, reliable operation
         using var pragmaCmd = connection.CreateCommand();
         pragmaCmd.CommandText = "PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;";
         await pragmaCmd.ExecuteNonQueryAsync(cancellationToken);
@@ -93,6 +92,46 @@ public class SqliteBatteryHistoryRepository : IBatteryHistoryRepository
             ";
             await alterCmd.ExecuteNonQueryAsync(cancellationToken);
             await tx.CommitAsync(cancellationToken);
+            currentVersion = 2;
+        }
+
+        if (currentVersion < 3)
+        {
+            using var tx = connection.BeginTransaction();
+            using var v3Cmd = connection.CreateCommand();
+            v3Cmd.Transaction = tx;
+            v3Cmd.CommandText = @"
+                CREATE TABLE IF NOT EXISTS ChargingSessions (
+                    Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    StartTime TEXT NOT NULL,
+                    EndTime TEXT,
+                    StartPercentage REAL NOT NULL,
+                    EndPercentage REAL,
+                    StartEnergyMwh REAL,
+                    EndEnergyMwh REAL,
+                    EnergyGainedMwh REAL,
+                    DurationMinutes REAL,
+                    ProviderSource TEXT,
+                    BatterySerialNumber TEXT,
+                    IsCompleted INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS IX_ChargingSessions_StartTime ON ChargingSessions (StartTime);
+
+                CREATE TABLE IF NOT EXISTS BatteryHealthHistory (
+                    Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    Timestamp TEXT NOT NULL,
+                    FullChargeCapacityMwh REAL NOT NULL,
+                    DesignCapacityMwh REAL NOT NULL,
+                    CycleCount INTEGER,
+                    BatterySerialNumber TEXT,
+                    BatteryName TEXT,
+                    Chemistry TEXT
+                );
+                CREATE INDEX IF NOT EXISTS IX_BatteryHealthHistory_Timestamp ON BatteryHealthHistory (Timestamp);
+                PRAGMA user_version = 3;
+            ";
+            await v3Cmd.ExecuteNonQueryAsync(cancellationToken);
+            await tx.CommitAsync(cancellationToken);
         }
     }
 
@@ -106,7 +145,6 @@ public class SqliteBatteryHistoryRepository : IBatteryHistoryRepository
         var state = reading.ChargingState.HasValue ? reading.ChargingState.Value.ToString() : "Unknown";
         var now = reading.Timestamp;
 
-        // Idle check: skip write if state is unchanged and idle interval hasn't elapsed
         lock (_throttleLock)
         {
             if (_lastRecorded != null)
@@ -118,7 +156,7 @@ public class SqliteBatteryHistoryRepository : IBatteryHistoryRepository
 
                 if (pctDelta < 0.5 && acUnchanged && stateUnchanged && elapsed < _minIdleWriteInterval)
                 {
-                    return false; // Throttled: no unnecessary disk write
+                    return false;
                 }
             }
         }
@@ -224,7 +262,7 @@ public class SqliteBatteryHistoryRepository : IBatteryHistoryRepository
                    ChargeRateMilliwatts, CycleCount, IsSimulated, VoltageMillivolts, ProviderSource
             FROM BatteryTelemetry
             WHERE Timestamp >= $since
-            ORDER BY Id ASC;
+            ORDER BY Timestamp ASC;
         ";
         cmd.Parameters.AddWithValue("$since", since.ToString("o"));
 
@@ -249,20 +287,353 @@ public class SqliteBatteryHistoryRepository : IBatteryHistoryRepository
         return await cmd.ExecuteNonQueryAsync(cancellationToken);
     }
 
-    private static BatteryReadingRecord ReadRecord(SqliteDataReader reader) => new()
+    public async Task<ChargingSessionRecord?> GetActiveChargingSessionAsync(CancellationToken cancellationToken = default)
     {
-        Id = reader.GetInt64(0),
-        Timestamp = DateTimeOffset.Parse(reader.GetString(1)),
-        Percentage = reader.GetDouble(2),
-        IsAcConnected = reader.GetInt32(3) == 1,
-        ChargingState = reader.GetString(4),
-        RemainingCapacityMwh = reader.IsDBNull(5) ? null : reader.GetDouble(5),
-        FullChargeCapacityMwh = reader.IsDBNull(6) ? null : reader.GetDouble(6),
-        DesignCapacityMwh = reader.IsDBNull(7) ? null : reader.GetDouble(7),
-        ChargeRateMilliwatts = reader.IsDBNull(8) ? null : reader.GetDouble(8),
-        CycleCount = reader.IsDBNull(9) ? null : reader.GetInt32(9),
-        IsSimulated = reader.GetInt32(10) == 1,
-        VoltageMillivolts = reader.FieldCount > 11 && !reader.IsDBNull(11) ? reader.GetDouble(11) : null,
-        ProviderSource = reader.FieldCount > 12 && !reader.IsDBNull(12) ? reader.GetString(12) : null
-    };
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT Id, StartTime, EndTime, StartPercentage, EndPercentage,
+                   StartEnergyMwh, EndEnergyMwh, EnergyGainedMwh, DurationMinutes,
+                   ProviderSource, BatterySerialNumber, IsCompleted
+            FROM ChargingSessions
+            WHERE IsCompleted = 0
+            ORDER BY StartTime DESC
+            LIMIT 1;
+        ";
+
+        using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        if (await reader.ReadAsync(cancellationToken))
+        {
+            return ReadChargingSession(reader);
+        }
+
+        return null;
+    }
+
+    public async Task<long> StartChargingSessionAsync(ChargingSessionRecord session, CancellationToken cancellationToken = default)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = @"
+            INSERT INTO ChargingSessions (
+                StartTime, StartPercentage, StartEnergyMwh, ProviderSource, BatterySerialNumber, IsCompleted
+            ) VALUES (
+                $startTime, $startPct, $startEnergy, $provider, $serial, 0
+            );
+            SELECT last_insert_rowid();
+        ";
+
+        cmd.Parameters.AddWithValue("$startTime", session.StartTime.ToString("o"));
+        cmd.Parameters.AddWithValue("$startPct", session.StartPercentage);
+        cmd.Parameters.AddWithValue("$startEnergy", (object?)session.StartEnergyMwh ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$provider", (object?)session.ProviderSource ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$serial", (object?)session.BatterySerialNumber ?? DBNull.Value);
+
+        var idObj = await cmd.ExecuteScalarAsync(cancellationToken);
+        return Convert.ToInt64(idObj);
+    }
+
+    public async Task<bool> CompleteChargingSessionAsync(long sessionId, DateTimeOffset endTime, double endPercentage, double? endEnergyMwh, CancellationToken cancellationToken = default)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        // Fetch start info to calculate energy gained and duration
+        using var selectCmd = connection.CreateCommand();
+        selectCmd.CommandText = "SELECT StartTime, StartEnergyMwh FROM ChargingSessions WHERE Id = $id;";
+        selectCmd.Parameters.AddWithValue("$id", sessionId);
+
+        DateTimeOffset startTime = endTime;
+        double? startEnergy = null;
+        using (var reader = await selectCmd.ExecuteReaderAsync(cancellationToken))
+        {
+            if (await reader.ReadAsync(cancellationToken))
+            {
+                startTime = DateTimeOffset.Parse(reader.GetString(0));
+                if (!reader.IsDBNull(1)) startEnergy = reader.GetDouble(1);
+            }
+            else
+            {
+                return false;
+            }
+        }
+
+        var durationMinutes = Math.Max(0.0, (endTime - startTime).TotalMinutes);
+        double? energyGained = null;
+        if (endEnergyMwh.HasValue && startEnergy.HasValue)
+        {
+            energyGained = Math.Max(0.0, endEnergyMwh.Value - startEnergy.Value);
+        }
+
+        using var updateCmd = connection.CreateCommand();
+        updateCmd.CommandText = @"
+            UPDATE ChargingSessions
+            SET EndTime = $endTime,
+                EndPercentage = $endPct,
+                EndEnergyMwh = $endEnergy,
+                EnergyGainedMwh = $energyGained,
+                DurationMinutes = $duration,
+                IsCompleted = 1
+            WHERE Id = $id;
+        ";
+
+        updateCmd.Parameters.AddWithValue("$id", sessionId);
+        updateCmd.Parameters.AddWithValue("$endTime", endTime.ToString("o"));
+        updateCmd.Parameters.AddWithValue("$endPct", endPercentage);
+        updateCmd.Parameters.AddWithValue("$endEnergy", (object?)endEnergyMwh ?? DBNull.Value);
+        updateCmd.Parameters.AddWithValue("$energyGained", (object?)energyGained ?? DBNull.Value);
+        updateCmd.Parameters.AddWithValue("$duration", durationMinutes);
+
+        var rows = await updateCmd.ExecuteNonQueryAsync(cancellationToken);
+        return rows > 0;
+    }
+
+    public async Task<IReadOnlyList<ChargingSessionRecord>> GetRecentChargingSessionsAsync(int limit = 20, CancellationToken cancellationToken = default)
+    {
+        var results = new List<ChargingSessionRecord>();
+
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT Id, StartTime, EndTime, StartPercentage, EndPercentage,
+                   StartEnergyMwh, EndEnergyMwh, EnergyGainedMwh, DurationMinutes,
+                   ProviderSource, BatterySerialNumber, IsCompleted
+            FROM ChargingSessions
+            ORDER BY StartTime DESC
+            LIMIT $limit;
+        ";
+        cmd.Parameters.AddWithValue("$limit", limit);
+
+        using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            results.Add(ReadChargingSession(reader));
+        }
+
+        return results;
+    }
+
+    public async Task<bool> RecordHealthObservationAsync(BatteryHealthRecord record, CancellationToken cancellationToken = default)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        // Check latest record to prevent inserting identical measurements
+        using var checkCmd = connection.CreateCommand();
+        checkCmd.CommandText = @"
+            SELECT FullChargeCapacityMwh, CycleCount, BatterySerialNumber
+            FROM BatteryHealthHistory
+            ORDER BY Timestamp DESC
+            LIMIT 1;
+        ";
+
+        using (var reader = await checkCmd.ExecuteReaderAsync(cancellationToken))
+        {
+            if (await reader.ReadAsync(cancellationToken))
+            {
+                var lastFull = reader.GetDouble(0);
+                int? lastCycle = reader.IsDBNull(1) ? null : reader.GetInt32(1);
+                string? lastSerial = reader.IsDBNull(2) ? null : reader.GetString(2);
+
+                if (Math.Abs(lastFull - record.FullChargeCapacityMwh) < 1.0 &&
+                    lastCycle == record.CycleCount &&
+                    string.Equals(lastSerial, record.BatterySerialNumber, StringComparison.OrdinalIgnoreCase))
+                {
+                    return false; // Redundant observation
+                }
+            }
+        }
+
+        using var insertCmd = connection.CreateCommand();
+        insertCmd.CommandText = @"
+            INSERT INTO BatteryHealthHistory (
+                Timestamp, FullChargeCapacityMwh, DesignCapacityMwh, CycleCount, BatterySerialNumber, BatteryName, Chemistry
+            ) VALUES (
+                $timestamp, $fullCap, $designCap, $cycles, $serial, $name, $chem
+            );
+        ";
+
+        insertCmd.Parameters.AddWithValue("$timestamp", record.Timestamp.ToString("o"));
+        insertCmd.Parameters.AddWithValue("$fullCap", record.FullChargeCapacityMwh);
+        insertCmd.Parameters.AddWithValue("$designCap", record.DesignCapacityMwh);
+        insertCmd.Parameters.AddWithValue("$cycles", (object?)record.CycleCount ?? DBNull.Value);
+        insertCmd.Parameters.AddWithValue("$serial", (object?)record.BatterySerialNumber ?? DBNull.Value);
+        insertCmd.Parameters.AddWithValue("$name", (object?)record.BatteryName ?? DBNull.Value);
+        insertCmd.Parameters.AddWithValue("$chem", (object?)record.Chemistry ?? DBNull.Value);
+
+        var rows = await insertCmd.ExecuteNonQueryAsync(cancellationToken);
+        return rows > 0;
+    }
+
+    public async Task<IReadOnlyList<BatteryHealthRecord>> GetHealthObservationsAsync(int limit = 50, CancellationToken cancellationToken = default)
+    {
+        var results = new List<BatteryHealthRecord>();
+
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT Id, Timestamp, FullChargeCapacityMwh, DesignCapacityMwh, CycleCount, BatterySerialNumber, BatteryName, Chemistry
+            FROM BatteryHealthHistory
+            ORDER BY Timestamp DESC
+            LIMIT $limit;
+        ";
+        cmd.Parameters.AddWithValue("$limit", limit);
+
+        using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            results.Add(new BatteryHealthRecord
+            {
+                Id = reader.GetInt64(0),
+                Timestamp = DateTimeOffset.Parse(reader.GetString(1)),
+                FullChargeCapacityMwh = reader.GetDouble(2),
+                DesignCapacityMwh = reader.GetDouble(3),
+                CycleCount = reader.IsDBNull(4) ? null : reader.GetInt32(4),
+                BatterySerialNumber = reader.IsDBNull(5) ? null : reader.GetString(5),
+                BatteryName = reader.IsDBNull(6) ? null : reader.GetString(6),
+                Chemistry = reader.IsDBNull(7) ? null : reader.GetString(7)
+            });
+        }
+
+        return results;
+    }
+
+    public async Task<BatteryUsageStats> GetUsageStatisticsAsync(TimeSpan period, CancellationToken cancellationToken = default)
+    {
+        var since = DateTimeOffset.UtcNow - period;
+        var readings = await GetReadingsSinceAsync(since, cancellationToken);
+        var sessions = await GetRecentChargingSessionsAsync(50, cancellationToken);
+
+        if (readings.Count == 0)
+        {
+            return new BatteryUsageStats { TotalChargingSessions = sessions.Count };
+        }
+
+        double acMinutes = 0;
+        double batteryMinutes = 0;
+        double highChargeMinutes = 0;
+        double totalDischargeMwh = 0;
+        double totalDischargeHours = 0;
+        var dischargeWattsSamples = new List<double>();
+
+        for (int i = 0; i < readings.Count - 1; i++)
+        {
+            var cur = readings[i];
+            var next = readings[i + 1];
+            var dtMinutes = Math.Clamp((next.Timestamp - cur.Timestamp).TotalMinutes, 0.0, 30.0);
+
+            if (cur.IsAcConnected)
+            {
+                acMinutes += dtMinutes;
+            }
+            else
+            {
+                batteryMinutes += dtMinutes;
+            }
+
+            if (cur.Percentage >= 80.0)
+            {
+                highChargeMinutes += dtMinutes;
+            }
+
+            if (!cur.IsAcConnected && cur.ChargeRateMilliwatts.HasValue && cur.ChargeRateMilliwatts.Value < 0)
+            {
+                dischargeWattsSamples.Add(Math.Abs(cur.ChargeRateMilliwatts.Value) / 1000.0);
+            }
+            else if (!cur.IsAcConnected && cur.RemainingCapacityMwh.HasValue && next.RemainingCapacityMwh.HasValue)
+            {
+                var drop = cur.RemainingCapacityMwh.Value - next.RemainingCapacityMwh.Value;
+                var dtHours = (next.Timestamp - cur.Timestamp).TotalHours;
+                if (drop > 0 && dtHours > 0.01 && dtHours < 0.5)
+                {
+                    totalDischargeMwh += drop;
+                    totalDischargeHours += dtHours;
+                }
+            }
+        }
+
+        double? avgDischargeWatts = null;
+        if (dischargeWattsSamples.Count > 0)
+        {
+            double sum = 0;
+            foreach (var w in dischargeWattsSamples) sum += w;
+            avgDischargeWatts = sum / dischargeWattsSamples.Count;
+        }
+        else if (totalDischargeHours > 0.05 && totalDischargeMwh > 0)
+        {
+            // Fallback: estimate average watts from observed capacity drop over time
+            avgDischargeWatts = (totalDischargeMwh / totalDischargeHours) / 1000.0;
+        }
+
+        TimeSpan? estimatedRuntime = null;
+        var latest = readings[^1];
+        if (avgDischargeWatts.HasValue && avgDischargeWatts.Value > 0.5 && latest.RemainingCapacityMwh.HasValue && !latest.IsAcConnected)
+        {
+            var remainingHours = (latest.RemainingCapacityMwh.Value / 1000.0) / avgDischargeWatts.Value;
+            if (remainingHours > 0 && remainingHours < 24)
+            {
+                estimatedRuntime = TimeSpan.FromHours(remainingHours);
+            }
+        }
+
+        var totalObservedMinutes = acMinutes + batteryMinutes;
+        double? percentHigh = totalObservedMinutes > 0 ? (highChargeMinutes / totalObservedMinutes) * 100.0 : null;
+
+        return new BatteryUsageStats
+        {
+            AverageDischargeRateWatts = avgDischargeWatts.HasValue ? Math.Round(avgDischargeWatts.Value, 1) : null,
+            EstimatedRuntimeFromHistory = estimatedRuntime,
+            TotalAcTimeHours = Math.Round(acMinutes / 60.0, 1),
+            TotalBatteryTimeHours = Math.Round(batteryMinutes / 60.0, 1),
+            PercentTimeAtHighCharge = percentHigh.HasValue ? Math.Round(percentHigh.Value, 1) : null,
+            TotalChargingSessions = sessions.Count
+        };
+    }
+
+    private static BatteryReadingRecord ReadRecord(SqliteDataReader reader)
+    {
+        return new BatteryReadingRecord
+        {
+            Id = reader.GetInt64(0),
+            Timestamp = DateTimeOffset.Parse(reader.GetString(1)),
+            Percentage = reader.GetDouble(2),
+            IsAcConnected = reader.GetInt32(3) == 1,
+            ChargingState = reader.GetString(4),
+            RemainingCapacityMwh = reader.IsDBNull(5) ? null : reader.GetDouble(5),
+            FullChargeCapacityMwh = reader.IsDBNull(6) ? null : reader.GetDouble(6),
+            DesignCapacityMwh = reader.IsDBNull(7) ? null : reader.GetDouble(7),
+            ChargeRateMilliwatts = reader.IsDBNull(8) ? null : reader.GetDouble(8),
+            CycleCount = reader.IsDBNull(9) ? null : reader.GetInt32(9),
+            IsSimulated = reader.GetInt32(10) == 1,
+            VoltageMillivolts = reader.IsDBNull(11) ? null : reader.GetDouble(11),
+            ProviderSource = reader.IsDBNull(12) ? null : reader.GetString(12)
+        };
+    }
+
+    private static ChargingSessionRecord ReadChargingSession(SqliteDataReader reader)
+    {
+        return new ChargingSessionRecord
+        {
+            Id = reader.GetInt64(0),
+            StartTime = DateTimeOffset.Parse(reader.GetString(1)),
+            EndTime = reader.IsDBNull(2) ? null : DateTimeOffset.Parse(reader.GetString(2)),
+            StartPercentage = reader.GetDouble(3),
+            EndPercentage = reader.IsDBNull(4) ? null : reader.GetDouble(4),
+            StartEnergyMwh = reader.IsDBNull(5) ? null : reader.GetDouble(5),
+            EndEnergyMwh = reader.IsDBNull(6) ? null : reader.GetDouble(6),
+            EnergyGainedMwh = reader.IsDBNull(7) ? null : reader.GetDouble(7),
+            DurationMinutes = reader.IsDBNull(8) ? null : reader.GetDouble(8),
+            ProviderSource = reader.IsDBNull(9) ? null : reader.GetString(9),
+            BatterySerialNumber = reader.IsDBNull(10) ? null : reader.GetString(10),
+            IsCompleted = reader.GetInt32(11) == 1
+        };
+    }
 }

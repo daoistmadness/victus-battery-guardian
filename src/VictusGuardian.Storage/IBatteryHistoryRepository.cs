@@ -22,4 +22,17 @@ public interface IBatteryHistoryRepository
     Task<IReadOnlyList<BatteryReadingRecord>> GetReadingsSinceAsync(DateTimeOffset since, CancellationToken cancellationToken = default);
 
     Task<int> PurgeOldReadingsAsync(DateTimeOffset olderThan, CancellationToken cancellationToken = default);
+
+    // Charging Session Tracking
+    Task<ChargingSessionRecord?> GetActiveChargingSessionAsync(CancellationToken cancellationToken = default);
+    Task<long> StartChargingSessionAsync(ChargingSessionRecord session, CancellationToken cancellationToken = default);
+    Task<bool> CompleteChargingSessionAsync(long sessionId, DateTimeOffset endTime, double endPercentage, double? endEnergyMwh, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<ChargingSessionRecord>> GetRecentChargingSessionsAsync(int limit = 20, CancellationToken cancellationToken = default);
+
+    // Battery Health History
+    Task<bool> RecordHealthObservationAsync(BatteryHealthRecord record, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<BatteryHealthRecord>> GetHealthObservationsAsync(int limit = 50, CancellationToken cancellationToken = default);
+
+    // Aggregated Usage Analysis
+    Task<BatteryUsageStats> GetUsageStatisticsAsync(TimeSpan period, CancellationToken cancellationToken = default);
 }
