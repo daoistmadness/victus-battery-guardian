@@ -19,6 +19,8 @@ jobs:
   test-linux:
     name: Build & Test (Ubuntu Linux)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -39,15 +41,23 @@ jobs:
       - name: Run Unit Tests
         run: dotnet test VictusBatteryGuardian.slnx --no-build -c Debug --verbosity normal
 
-      - name: Verify Packaging & Packslip Integrity
+      - name: Verify Windows x64 Packaging & Draft Packslip
         run: |
-          pwsh -File ./scripts/package.ps1 -Version 0.2.0-ci -OutputDir artifacts-test
-          pwsh -File ./scripts/verify-draft.ps1 -ArtifactsDir artifacts-test
-          rm -rf artifacts-test
+          pwsh -File ./scripts/package.ps1 -Version 0.2.5-ci -OutputDir artifacts-ci
+          pwsh -File ./scripts/verify-draft.ps1 -ArtifactsDir artifacts-ci
+
+      - name: Upload Windows x64 Validation Package (Artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: victus-guardian-win-x64-validation-package
+          path: artifacts-ci/
+          retention-days: 7
 
   test-windows:
     name: Build & Test (Windows Server)
     runs-on: windows-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4

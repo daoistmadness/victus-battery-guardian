@@ -81,3 +81,53 @@ The production release workflow (`.github/workflows/ci-release.yml`) is designed
    The semantic release publishing job is gated behind the `ENABLE_PRODUCTION_RELEASE` repository variable. By default, builds run tests and local packaging validation without publishing.
 3. **Immutable Tagging**:
    Tags are published strictly through automated semantic release using Conventional Commits.
+
+---
+
+## 5. Official Packslip GitHub Action Workflow Integration
+
+When Sigstore keyless signing is activated in production, the workflow utilizes GitHub's OIDC tokens (`id-token: write`) alongside the official Packslip signing step:
+
+```yaml
+  release:
+    name: Semantic Release & Packslip Publishing
+    needs: [test-linux, test-windows]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.ENABLE_PRODUCTION_RELEASE == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+      id-token: write # Required for keyless Sigstore Fulcio certificate issuance
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Publish & Package Win-x64 Release
+        run: pwsh -File ./scripts/package.ps1 -Version ${{ env.RELEASE_VERSION }}
+
+      - name: Sign Packslip with Sigstore Cosign
+        uses: sigstore/cosign-installer@v3.8.0
+
+      - name: Generate Keyless Signature
+        run: |
+          cosign sign-blob \
+            --yes \
+            --bundle artifacts/VictusGuardian-packslip.bundle \
+            artifacts/*-packslip.json
+
+      - name: Verify Signature before Release Publication
+        run: |
+          cosign verify-blob \
+            --bundle artifacts/VictusGuardian-packslip.bundle \
+            --certificate-identity "https://github.com/daoistmadness/victus-battery-guardian/.github/workflows/ci-release.yml@refs/heads/main" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            artifacts/*-packslip.json
+```
+
+### Strict Signing Policy:
+> [!CAUTION]
+> **No Silent Fallback**: The release pipeline must never silently fall back from a required signature to an unsigned publication. If the Sigstore token exchange, certificate issuance, or transparency log recording fails, the release job must fail immediately, halting publication.
