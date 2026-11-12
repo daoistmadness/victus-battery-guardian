@@ -5,8 +5,8 @@
         x:Class="VictusGuardian.App.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
         Title="Victus Battery Guardian"
-        Width="1050" Height="680"
-        MinWidth="900" MinHeight="550"
+        Width="1050" Height="720"
+        MinWidth="900" MinHeight="600"
         Background="{StaticResource AppBackgroundBrush}"
         WindowStartupLocation="CenterScreen">
 
@@ -14,7 +14,14 @@
     <!-- 1. DASHBOARD VIEW -->
     <DataTemplate DataType="{x:Type vm:DashboardViewModel}">
       <ScrollViewer VerticalScrollBarVisibility="Auto">
-        <StackPanel Margin="24" Spacing="20">
+        <StackPanel Margin="24" Spacing="16">
+
+          <!-- Stale Warning Banner -->
+          <Border Background="#3B2A10" BorderBrush="#F59E0B" BorderThickness="1"
+                  CornerRadius="6" Padding="14,10" IsVisible="{Binding IsStale}">
+            <TextBlock Text="{Binding StaleWarningText}" Foreground="#FCD34D"
+                       FontSize="12" FontWeight="SemiBold" />
+          </Border>
 
           <!-- Overview Cards Grid -->
           <Grid ColumnDefinitions="*, *" RowDefinitions="Auto, Auto">
@@ -59,7 +66,7 @@
                     <TextBlock Text="{Binding EstimatedTimeRemainingText}" FontSize="14" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" />
                   </StackPanel>
                   <StackPanel Grid.Column="1" Spacing="2">
-                    <TextBlock Text="Discharge Rate" FontSize="11" Foreground="{StaticResource TextMutedBrush}" />
+                    <TextBlock Text="Charge/Discharge Rate" FontSize="11" Foreground="{StaticResource TextMutedBrush}" />
                     <TextBlock Text="{Binding ChargeRateText}" FontSize="14" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" />
                   </StackPanel>
                 </Grid>
@@ -119,8 +126,52 @@
                 </ItemsControl>
               </StackPanel>
             </Border>
-
           </Grid>
+
+          <!-- Hardware Telemetry & Sensor Capabilities Card -->
+          <Border Background="{StaticResource CardBackgroundBrush}"
+                  BorderBrush="{StaticResource CardBorderBrush}"
+                  BorderThickness="1" CornerRadius="8" Padding="20">
+            <StackPanel Spacing="12">
+              <TextBlock Text="HARDWARE TELEMETRY &amp; SENSOR CAPABILITIES" FontSize="12" FontWeight="SemiBold"
+                         Foreground="{StaticResource TextSecondaryBrush}" />
+
+              <Grid ColumnDefinitions="*, *, *">
+                <StackPanel Grid.Column="0" Spacing="4">
+                  <TextBlock Text="Battery Voltage" FontSize="11" Foreground="{StaticResource TextMutedBrush}" />
+                  <TextBlock Text="{Binding VoltageText}" FontSize="14" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" />
+
+                  <TextBlock Text="Design Capacity" FontSize="11" Foreground="{StaticResource TextMutedBrush}" Margin="0,8,0,0" />
+                  <TextBlock Text="{Binding DesignCapacityText}" FontSize="13" Foreground="{StaticResource TextSecondaryBrush}" />
+                </StackPanel>
+
+                <StackPanel Grid.Column="1" Spacing="4">
+                  <TextBlock Text="Full Charge Capacity" FontSize="11" Foreground="{StaticResource TextMutedBrush}" />
+                  <TextBlock Text="{Binding FullChargeCapacityText}" FontSize="14" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" />
+
+                  <TextBlock Text="Cycle Count" FontSize="11" Foreground="{StaticResource TextMutedBrush}" Margin="0,8,0,0" />
+                  <TextBlock Text="{Binding CycleCountText}" FontSize="13" Foreground="{StaticResource TextSecondaryBrush}" />
+                </StackPanel>
+
+                <StackPanel Grid.Column="2" Spacing="4">
+                  <TextBlock Text="Battery Identity" FontSize="11" Foreground="{StaticResource TextMutedBrush}" />
+                  <TextBlock Text="{Binding BatteryIdentityText}" FontSize="13" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" TextWrapping="Wrap" />
+
+                  <TextBlock Text="Active Telemetry Tier" FontSize="11" Foreground="{StaticResource TextMutedBrush}" Margin="0,8,0,0" />
+                  <TextBlock Text="{Binding ActiveProviderTier}" FontSize="12" Foreground="{StaticResource AccentGreenBrush}" TextWrapping="Wrap" />
+                </StackPanel>
+              </Grid>
+
+              <Separator Background="{StaticResource CardBorderBrush}" Margin="0,6" />
+
+              <TextBlock Text="Supported Sensor Channels:" FontSize="11" Foreground="{StaticResource TextMutedBrush}" />
+              <TextBlock Text="{Binding SupportedSensorsText}" FontSize="12" Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" />
+
+              <TextBlock Text="Unsupported Sensor Channels:" FontSize="11" Foreground="{StaticResource TextMutedBrush}" Margin="0,4,0,0" />
+              <TextBlock Text="{Binding UnsupportedSensorsText}" FontSize="12" Foreground="{StaticResource TextMutedBrush}" TextWrapping="Wrap" />
+            </StackPanel>
+          </Border>
+
         </StackPanel>
       </ScrollViewer>
     </DataTemplate>
@@ -133,36 +184,34 @@
                   BorderBrush="{StaticResource CardBorderBrush}"
                   BorderThickness="1" CornerRadius="8" Padding="24">
             <StackPanel Spacing="16">
-              <TextBlock Text="BATTERY HEALTH &amp; DEGRADATION ANALYSIS" FontSize="16" FontWeight="Bold"
+              <TextBlock Text="BATTERY WEAR &amp; DEGRADATION ANALYSIS" FontSize="16" FontWeight="Bold"
                          Foreground="{StaticResource TextPrimaryBrush}" />
-              <TextBlock Text="{Binding ProvenanceNotice}" FontSize="13"
-                         Foreground="{StaticResource TextMutedBrush}" />
+              <TextBlock Text="{Binding ProvenanceNotice}" FontSize="12" Foreground="{StaticResource TextMutedBrush}" />
 
-              <Grid ColumnDefinitions="*, *, *" RowDefinitions="Auto, Auto" Margin="0,16,0,0">
-                <StackPanel Grid.Row="0" Grid.Column="0" Margin="0,0,10,20">
-                  <TextBlock Text="Calculated Health" FontSize="12" Foreground="{StaticResource TextMutedBrush}" />
-                  <TextBlock Text="{Binding HealthPercentage, StringFormat={}{0:F1}%}" FontSize="28" FontWeight="Bold" Foreground="{StaticResource AccentCyanBrush}" />
-                </StackPanel>
-                <StackPanel Grid.Row="0" Grid.Column="1" Margin="10,0,10,20">
-                  <TextBlock Text="Estimated Wear Level" FontSize="12" Foreground="{StaticResource TextMutedBrush}" />
-                  <TextBlock Text="{Binding WearPercentage, StringFormat={}{0:F1}%}" FontSize="28" FontWeight="Bold" Foreground="{StaticResource TextPrimaryBrush}" />
-                </StackPanel>
-                <StackPanel Grid.Row="0" Grid.Column="2" Margin="10,0,0,20">
-                  <TextBlock Text="Cycle Count" FontSize="12" Foreground="{StaticResource TextMutedBrush}" />
-                  <TextBlock Text="{Binding CycleCountText}" FontSize="28" FontWeight="Bold" Foreground="{StaticResource AccentGreenBrush}" />
+              <Grid ColumnDefinitions="*, *" Margin="0,16,0,0">
+                <StackPanel Grid.Column="0" Spacing="8">
+                  <TextBlock Text="Overall Health Score" FontSize="13" Foreground="{StaticResource TextSecondaryBrush}" />
+                  <TextBlock Text="{Binding HealthPercentage, StringFormat={}{0:F1}%}" FontSize="54" FontWeight="Black"
+                             Foreground="{StaticResource AccentCyanBrush}" />
+                  <TextBlock Text="{Binding RatingText, StringFormat=Rating: {0}}" FontSize="15" FontWeight="SemiBold"
+                             Foreground="{StaticResource TextPrimaryBrush}" />
                 </StackPanel>
 
-                <StackPanel Grid.Row="1" Grid.Column="0" Margin="0,0,10,0">
-                  <TextBlock Text="Full Charge Capacity" FontSize="12" Foreground="{StaticResource TextMutedBrush}" />
-                  <TextBlock Text="{Binding FullChargeCapacityText}" FontSize="18" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" />
-                </StackPanel>
-                <StackPanel Grid.Row="1" Grid.Column="1" Margin="10,0,10,0">
-                  <TextBlock Text="Factory Design Capacity" FontSize="12" Foreground="{StaticResource TextMutedBrush}" />
-                  <TextBlock Text="{Binding DesignCapacityText}" FontSize="18" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" />
-                </StackPanel>
-                <StackPanel Grid.Row="1" Grid.Column="2" Margin="10,0,0,0">
-                  <TextBlock Text="Overall Condition" FontSize="12" Foreground="{StaticResource TextMutedBrush}" />
-                  <TextBlock Text="{Binding RatingText}" FontSize="18" FontWeight="SemiBold" Foreground="{StaticResource AccentGreenBrush}" />
+                <StackPanel Grid.Column="1" Spacing="12">
+                  <TextBlock Text="Detailed Metrics" FontSize="14" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" />
+                  <Grid ColumnDefinitions="*, Auto" RowDefinitions="Auto, Auto, Auto, Auto">
+                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Estimated Wear:" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,4" />
+                    <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding WearPercentage, StringFormat={}{0:F1}%}" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,4" />
+
+                    <TextBlock Grid.Row="1" Grid.Column="0" Text="Current Full Capacity:" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,4" />
+                    <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding FullChargeCapacityText}" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,4" />
+
+                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Factory Design Capacity:" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,4" />
+                    <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding DesignCapacityText}" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,4" />
+
+                    <TextBlock Grid.Row="3" Grid.Column="0" Text="Cycle Count:" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,4" />
+                    <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding CycleCountText}" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,4" />
+                  </Grid>
                 </StackPanel>
               </Grid>
             </StackPanel>
@@ -179,34 +228,27 @@
                   BorderBrush="{StaticResource CardBorderBrush}"
                   BorderThickness="1" CornerRadius="8" Padding="24">
             <StackPanel Spacing="16">
-              <TextBlock Text="CHARGING &amp; POWER STATUS" FontSize="16" FontWeight="Bold"
+              <TextBlock Text="CHARGING THRESHOLDS &amp; LONGEVITY PROFILE" FontSize="16" FontWeight="Bold"
                          Foreground="{StaticResource TextPrimaryBrush}" />
+              <TextBlock Text="Protect lithium cells by maintaining optimal charge levels (40% - 80% range recommended)."
+                         FontSize="13" Foreground="{StaticResource TextMutedBrush}" />
 
-              <Grid ColumnDefinitions="*, *" RowDefinitions="Auto, Auto" Margin="0,16,0,0">
-                <StackPanel Grid.Row="0" Grid.Column="0" Margin="0,0,10,20">
-                  <TextBlock Text="AC Line Status" FontSize="12" Foreground="{StaticResource TextMutedBrush}" />
-                  <TextBlock Text="{Binding AcLineStatus}" FontSize="20" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" />
-                </StackPanel>
-                <StackPanel Grid.Row="0" Grid.Column="1" Margin="10,0,0,20">
-                  <TextBlock Text="Current Charging State" FontSize="12" Foreground="{StaticResource TextMutedBrush}" />
-                  <TextBlock Text="{Binding ChargingState}" FontSize="20" FontWeight="SemiBold" Foreground="{StaticResource AccentGreenBrush}" />
+              <Grid ColumnDefinitions="*, *" Margin="0,16,0,0">
+                <StackPanel Grid.Column="0" Spacing="12">
+                  <TextBlock Text="Longevity Target" FontSize="13" Foreground="{StaticResource TextSecondaryBrush}" />
+                  <TextBlock Text="{Binding LongevityTargetText}" FontSize="36" FontWeight="Bold"
+                             Foreground="{StaticResource AccentGreenBrush}" />
+                  <ProgressBar Value="{Binding BatteryPercentage}" Minimum="0" Maximum="100" Height="8" CornerRadius="4"
+                               Foreground="{StaticResource AccentGreenBrush}" Background="{StaticResource CardBorderBrush}" />
                 </StackPanel>
 
-                <StackPanel Grid.Row="1" Grid.Column="0" Margin="0,0,10,0">
-                  <TextBlock Text="Charge / Discharge Rate" FontSize="12" Foreground="{StaticResource TextMutedBrush}" />
-                  <TextBlock Text="{Binding ChargeDischargeRate}" FontSize="20" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" />
-                </StackPanel>
-                <StackPanel Grid.Row="1" Grid.Column="1" Margin="10,0,0,0">
-                  <TextBlock Text="Longevity Target Mode" FontSize="12" Foreground="{StaticResource TextMutedBrush}" />
-                  <TextBlock Text="{Binding TargetChargeMode}" FontSize="20" FontWeight="SemiBold" Foreground="{StaticResource AccentCyanBrush}" />
+                <StackPanel Grid.Column="1" Spacing="12">
+                  <TextBlock Text="Longevity Status" FontSize="13" Foreground="{StaticResource TextSecondaryBrush}" />
+                  <TextBlock Text="{Binding ThresholdStatusText}" FontSize="15" FontWeight="SemiBold"
+                             Foreground="{StaticResource TextPrimaryBrush}" TextWrapping="Wrap" />
+                  <TextBlock Text="{Binding RecommendationText}" FontSize="13" Foreground="{StaticResource TextMutedBrush}" TextWrapping="Wrap" />
                 </StackPanel>
               </Grid>
-
-              <Border Background="#131C28" BorderBrush="{StaticResource CardBorderBrush}"
-                      BorderThickness="1" CornerRadius="6" Padding="16" Margin="0,16,0,0">
-                <TextBlock Text="{Binding AdvisoryMessage}" TextWrapping="Wrap"
-                           FontSize="13" Foreground="{StaticResource TextSecondaryBrush}" />
-              </Border>
             </StackPanel>
           </Border>
         </StackPanel>
@@ -220,40 +262,39 @@
           <Border Background="{StaticResource CardBackgroundBrush}"
                   BorderBrush="{StaticResource CardBorderBrush}"
                   BorderThickness="1" CornerRadius="8" Padding="20">
-            <StackPanel Spacing="16">
+            <StackPanel Spacing="14">
               <Grid ColumnDefinitions="*, Auto">
-                <StackPanel Grid.Column="0">
-                  <TextBlock Text="BATTERY TELEMETRY HISTORY (SQLite)" FontSize="16" FontWeight="Bold"
+                <StackPanel Grid.Column="0" Spacing="2">
+                  <TextBlock Text="PERSISTED TELEMETRY HISTORY (SQLite WAL)" FontSize="14" FontWeight="Bold"
                              Foreground="{StaticResource TextPrimaryBrush}" />
-                  <TextBlock Text="{Binding StatusMessage}" FontSize="12"
-                             Foreground="{StaticResource TextMutedBrush}" Margin="0,4,0,0" />
+                  <TextBlock Text="Local database writes are throttled during steady battery states to protect SSD endurance."
+                             FontSize="12" Foreground="{StaticResource TextMutedBrush}" />
                 </StackPanel>
-                <Button Grid.Column="1" Content="Clear History"
-                        Command="{Binding ClearHistoryCommand}"
+                <Button Grid.Column="1" Content="Purge History"
+                        Command="{Binding PurgeOldDataCommand}"
                         Background="{StaticResource CardBorderBrush}"
                         Foreground="{StaticResource TextPrimaryBrush}"
-                        Padding="12,6" />
+                        Padding="12,6" CornerRadius="4" />
               </Grid>
 
-              <!-- Telemetry Records Table -->
-              <ItemsControl ItemsSource="{Binding RecentRecords}">
+              <ItemsControl ItemsSource="{Binding RecentReadings}">
                 <ItemsControl.ItemTemplate>
                   <DataTemplate DataType="{x:Type m:BatteryReadingRecord}">
-                    <Border Background="#121824" BorderBrush="{StaticResource CardBorderBrush}"
+                    <Border Background="#151C28" BorderBrush="{StaticResource CardBorderBrush}"
                             BorderThickness="1" CornerRadius="4" Padding="12,8" Margin="0,3">
-                      <Grid ColumnDefinitions="140, 60, 100, 100, 100, *">
+                      <Grid ColumnDefinitions="140, 60, 100, 90, 80, *">
                         <TextBlock Grid.Column="0" Text="{Binding Timestamp, StringFormat={}{0:yyyy-MM-dd HH:mm:ss}}"
-                                   FontSize="12" Foreground="{StaticResource TextMutedBrush}" VerticalAlignment="Center" />
+                                   FontSize="11" Foreground="{StaticResource TextMutedBrush}" VerticalAlignment="Center" />
                         <TextBlock Grid.Column="1" Text="{Binding Percentage, StringFormat={}{0:F0}%}"
-                                   FontSize="13" FontWeight="Bold" Foreground="{StaticResource AccentGreenBrush}" VerticalAlignment="Center" />
+                                   FontWeight="Bold" Foreground="{StaticResource TextPrimaryBrush}" VerticalAlignment="Center" />
                         <TextBlock Grid.Column="2" Text="{Binding ChargingState}"
+                                   FontSize="12" Foreground="{StaticResource AccentGreenBrush}" VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="3" Text="{Binding IsAcConnected, StringFormat='AC: {0}'}"
                                    FontSize="12" Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Center" />
-                        <TextBlock Grid.Column="3" Text="{Binding ChargeRateMilliwatts, StringFormat={}{0:F0} mW}"
-                                   FontSize="12" Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Center" />
-                        <TextBlock Grid.Column="4" Text="{Binding RemainingCapacityMwh, StringFormat={}{0:F0} mWh}"
-                                   FontSize="12" Foreground="{StaticResource TextMutedBrush}" VerticalAlignment="Center" />
-                        <TextBlock Grid.Column="5" Text="{Binding IsSimulated, StringFormat={}(Simulated: {0})}"
-                                   FontSize="11" Foreground="{StaticResource TextMutedBrush}" HorizontalAlignment="Right" VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="4" Text="{Binding ChargeRateMilliwatts, StringFormat='{}{0:N0} mW'}"
+                                   FontSize="11" Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="5" Text="{Binding IsSimulated, StringFormat='Sim: {0}'}"
+                                   FontSize="10" Foreground="{StaticResource TextMutedBrush}" VerticalAlignment="Center" HorizontalAlignment="Right" />
                       </Grid>
                     </Border>
                   </DataTemplate>
@@ -278,19 +319,30 @@
               <TextBlock Text="Adjust simulated battery parameters to evaluate UI behavior across diverse battery scenarios."
                          FontSize="13" Foreground="{StaticResource TextMutedBrush}" />
 
-              <StackPanel Spacing="12" Margin="0,12,0,0">
+              <StackPanel Spacing="12" Margin="0,8,0,0">
+                <CheckBox Content="Enable Demo Mode (Simulate HP Victus 70 Wh Battery)"
+                          IsChecked="{Binding IsDemoMode}"
+                          Foreground="{StaticResource AccentGreenBrush}" FontWeight="SemiBold" />
+                <TextBlock Text="When disabled, queries physical Windows battery device interfaces (IOCTL / GetSystemPowerStatus)."
+                           FontSize="11" Foreground="{StaticResource TextMutedBrush}" Margin="26,0,0,0" />
+
+                <Separator Background="{StaticResource CardBorderBrush}" Margin="0,8" />
+
                 <TextBlock Text="Simulated Battery Percentage:" FontSize="13" Foreground="{StaticResource TextSecondaryBrush}" />
                 <Slider Minimum="1" Maximum="100" Value="{Binding SimulatedPercentage}"
+                        IsEnabled="{Binding IsDemoMode}"
                         Foreground="{StaticResource AccentGreenBrush}" />
                 <TextBlock Text="{Binding SimulatedPercentage, StringFormat={}{0:F0}%}" FontWeight="Bold"
                            Foreground="{StaticResource AccentGreenBrush}" />
 
                 <CheckBox Content="Simulate AC Adapter Connected" IsChecked="{Binding SimulatedAcConnected}"
+                          IsEnabled="{Binding IsDemoMode}"
                           Foreground="{StaticResource TextPrimaryBrush}" Margin="0,8,0,0" />
 
                 <StackPanel Spacing="6" Margin="0,8,0,0">
                   <TextBlock Text="Simulated Rate (Watts):" FontSize="13" Foreground="{StaticResource TextSecondaryBrush}" />
-                  <Slider Minimum="5" Maximum="80" Value="{Binding SimulatedDischargeRateWatts}" />
+                  <Slider Minimum="5" Maximum="80" Value="{Binding SimulatedDischargeRateWatts}"
+                          IsEnabled="{Binding IsDemoMode}" />
                   <TextBlock Text="{Binding SimulatedDischargeRateWatts, StringFormat={}{0:F1} W}" FontWeight="Bold"
                              Foreground="{StaticResource TextPrimaryBrush}" />
                 </StackPanel>
@@ -298,10 +350,12 @@
                 <StackPanel Orientation="Horizontal" Spacing="12" Margin="0,16,0,0">
                   <Button Content="Apply Simulated Values"
                           Command="{Binding ApplySimulationSettingsCommand}"
+                          IsEnabled="{Binding IsDemoMode}"
                           Background="{StaticResource AccentGreenBrush}"
                           Foreground="#000000" FontWeight="SemiBold" Padding="16,8" />
                   <Button Content="Reset to HP Victus Defaults"
                           Command="{Binding ResetDefaultsCommand}"
+                          IsEnabled="{Binding IsDemoMode}"
                           Background="{StaticResource CardBorderBrush}"
                           Foreground="{StaticResource TextPrimaryBrush}" Padding="16,8" />
                 </StackPanel>
@@ -380,7 +434,8 @@
 
         <!-- Bottom Demo Mode Badge & Version -->
         <StackPanel Grid.Row="2" Margin="16,20" Spacing="8">
-          <Border Background="{StaticResource DemoBadgeBackgroundBrush}" CornerRadius="4" Padding="8,4">
+          <Border Background="{StaticResource DemoBadgeBackgroundBrush}" CornerRadius="4" Padding="8,4"
+                  IsVisible="{Binding IsDemoModeActive}">
             <TextBlock Text="DEMO MODE ACTIVE" FontSize="10" FontWeight="Bold"
                        Foreground="{StaticResource DemoBadgeForegroundBrush}" HorizontalAlignment="Center" />
           </Border>
@@ -406,7 +461,7 @@
 
           <Border Grid.Column="1" Background="#261E0A" BorderBrush="{StaticResource DemoBadgeBackgroundBrush}"
                   BorderThickness="1" CornerRadius="4" Padding="10,4" Margin="0,0,16,0" VerticalAlignment="Center">
-            <TextBlock Text="⚠ Simulated Readings Active — Hardware Provider in Next Milestone"
+            <TextBlock Text="{Binding ProviderStatusBanner}"
                        FontSize="11" Foreground="{StaticResource DemoBadgeBackgroundBrush}" FontWeight="SemiBold" />
           </Border>
 

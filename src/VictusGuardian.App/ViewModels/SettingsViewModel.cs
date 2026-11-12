@@ -2,16 +2,18 @@ using System;
 using System.IO;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using VictusGuardian.Core.Contracts;
 using VictusGuardian.Core.Simulation;
 
 namespace VictusGuardian.App.ViewModels;
 
 public partial class SettingsViewModel : ViewModelBase
 {
+    private readonly ICompositeBatteryTelemetryProvider _compositeProvider;
     private readonly ISimulatedBatteryService _simulator;
 
     [ObservableProperty]
-    private bool _isDemoMode = true;
+    private bool _isDemoMode;
 
     [ObservableProperty]
     private double _simulatedPercentage = 78.5;
@@ -31,12 +33,25 @@ public partial class SettingsViewModel : ViewModelBase
     [ObservableProperty]
     private string _settingsStatusMessage = "Settings loaded.";
 
-    public SettingsViewModel(ISimulatedBatteryService simulator)
+    public SettingsViewModel(
+        ICompositeBatteryTelemetryProvider compositeProvider,
+        ISimulatedBatteryService simulator)
     {
+        _compositeProvider = compositeProvider;
         _simulator = simulator;
+
+        _isDemoMode = _compositeProvider.IsDemoModeEnabled;
 
         var appData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
         DatabasePath = Path.Combine(appData, "VictusGuardian", "battery_history.db");
+    }
+
+    partial void OnIsDemoModeChanged(bool value)
+    {
+        _compositeProvider.IsDemoModeEnabled = value;
+        SettingsStatusMessage = value
+            ? "Demo Mode ENABLED: Telemetry is now simulated for evaluation."
+            : "Demo Mode DISABLED: Probing physical hardware telemetry.";
     }
 
     [RelayCommand]
