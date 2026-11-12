@@ -47,10 +47,10 @@ public static class DiagnosticRunner
 
         var version = AppVersion.FullVersion;
         var commitSha = AppVersion.CommitSha;
-        var isSoftware = Program.IsSoftwareRenderingRequested(args);
-        var renderingMode = isSoftware
-            ? "Software Rendering (Win32RenderingMode.Software, RedirectionSurface)"
-            : "Hardware Accelerated (Win32RenderingMode.AngleEgl / Direct3D)";
+        var renderMode = Program.GetEffectiveRenderMode(args);
+        var renderingMode = renderMode == Program.RenderMode.Hardware
+            ? "Hardware Accelerated (Win32RenderingMode.AngleEgl / Direct3D)"
+            : "Software Rendering (Win32RenderingMode.Software, RedirectionSurface) [Default]";
 
         var reading = await composite.GetReadingAsync();
 

@@ -29,21 +29,26 @@ Analysis demonstrated that the apparent "memory bloat" in Task Manager consists 
 ### 2.1 Avalonia Win32 Platform Options Architecture
 Victus Battery Guardian implements dual-backend rendering configuration via `Win32PlatformOptions`:
 
-- **Hardware Accelerated (Default / Recommended):**
-  - Rendering Mode: `[Win32RenderingMode.AngleEgl, Win32RenderingMode.Software]`
-  - Composition Mode: `[Win32CompositionMode.WinUIComposition, Win32CompositionMode.DirectComposition, Win32CompositionMode.RedirectionSurface]`
-  - Advantages: Smooth 60/144Hz animations, hardware GPU offloading, low CPU consumption.
-  - Tradeoff: ~100–120 MB shared driver working set allocated in physical RAM.
-- **Software Rendering (Diagnostic / Low-Memory Mode):**
+- **Software Rendering (Production Default):**
   - Rendering Mode: `[Win32RenderingMode.Software]`
   - Composition Mode: `[Win32CompositionMode.RedirectionSurface]`
-  - Launch arguments: `--software-rendering`, `--software`, `--render-mode software`
-  - Environment variables: `VICTUS_RENDER_MODE=software` or `VICTUS_SOFTWARE_RENDERING=1`
-  - Advantages: Drastically reduces shared GPU memory, disables DirectX driver surfaces, eliminates D3D swapchains.
-  - Tradeoff: Increased CPU utilization during UI layout and redrawing.
+  - Physical Benchmark Results on HP Victus 15.6:
+    - Working Set: **55.9 MB to 75.7 MB** (down from ~231 MB baseline, ~70% reduction)
+    - CPU Utilization: **0.3% to 0.4%** (negligible background overhead, indistinguishable from hardware idle)
+    - Fresh Launch: ~100 MB settling to ~55–75 MB
+    - Tray State (Windows Efficiency Mode): ~35–50 MB, < 0.1% CPU
+  - Advantages: Drastically reduces working set, eliminates AMD Radeon user-mode driver surface allocations, eliminates Direct3D/ANGLE swapchain overhead, and allows Windows 11 EcoQoS (Efficiency Mode) to cleanly suspend paint activity in the notification tray.
+- **Hardware Accelerated (Explicit Compatibility / Diagnostic Mode):**
+  - Rendering Mode: `[Win32RenderingMode.AngleEgl, Win32RenderingMode.Software]`
+  - Composition Mode: `[Win32CompositionMode.WinUIComposition, Win32CompositionMode.DirectComposition, Win32CompositionMode.RedirectionSurface]`
+  - Launch arguments: `--hardware-rendering`, `--hardware`, `--render-mode=hardware`, `--render-mode hardware`
+  - Environment variables: `VICTUS_RENDER_MODE=hardware` or `VICTUS_HARDWARE_RENDERING=1`
+  - Advantages: Direct3D 11 / ANGLE EGL acceleration for systems where hardware compositing is explicitly preferred.
+  - Tradeoff: ~100–120 MB shared driver working set allocated in physical RAM.
 
-### 2.2 Recommendation
-**Retain Hardware Rendering as the production default.** GPU shared memory on modern Windows 11 systems is pagable and shared with the OS DWM; forcing software rendering increases CPU battery consumption, contradicting the primary purpose of a battery conservation utility.
+### 2.2 Architectural Decision & Justification
+**Software Rendering is the default Windows renderer starting in Milestone 4.7.**
+Physical device benchmarking on the HP Victus 15.6 disproved the hypothesis that software rendering would cause battery-draining CPU loops. Instead, Avalonia's software rasterizer on Windows GDI RedirectionSurface uses only 0.3%–0.4% CPU while cutting working set by over 150 MB. For a battery monitoring utility designed to live in the system tray for days, this represents a substantial improvement in resource efficiency. Hardware rendering is fully preserved via `--hardware-rendering` for compatibility.
 
 ---
 

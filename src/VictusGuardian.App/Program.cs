@@ -84,6 +84,42 @@ public class Program
         }
     }
 
+    public enum RenderMode
+    {
+        Software,
+        Hardware
+    }
+
+    public static bool IsHardwareRenderingRequested(string[]? args = null)
+    {
+        args ??= Environment.GetCommandLineArgs();
+
+        if (args.Any(arg => arg.Equals("--hardware-rendering", StringComparison.OrdinalIgnoreCase) ||
+                            arg.Equals("--hardware", StringComparison.OrdinalIgnoreCase) ||
+                            arg.Equals("--render-mode=hardware", StringComparison.OrdinalIgnoreCase)))
+        {
+            return true;
+        }
+
+        for (var i = 0; i < args.Length - 1; i++)
+        {
+            if (args[i].Equals("--render-mode", StringComparison.OrdinalIgnoreCase) &&
+                args[i + 1].Equals("hardware", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        var envRenderMode = Environment.GetEnvironmentVariable("VICTUS_RENDER_MODE");
+        if (string.Equals(envRenderMode, "hardware", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        var envHardware = Environment.GetEnvironmentVariable("VICTUS_HARDWARE_RENDERING");
+        return envHardware == "1" || string.Equals(envHardware, "true", StringComparison.OrdinalIgnoreCase);
+    }
+
     public static bool IsSoftwareRenderingRequested(string[]? args = null)
     {
         args ??= Environment.GetCommandLineArgs();
@@ -114,15 +150,28 @@ public class Program
         return envSoftware == "1" || string.Equals(envSoftware, "true", StringComparison.OrdinalIgnoreCase);
     }
 
+    public static RenderMode GetEffectiveRenderMode(string[]? args = null)
+    {
+        if (IsHardwareRenderingRequested(args))
+        {
+            return RenderMode.Hardware;
+        }
+
+        // On Windows, Software Rendering is the default. Physical testing on HP Victus demonstrated
+        // working set reduction from ~231 MB to 55.9–75.7 MB with negligible CPU utilization (0.3–0.4%).
+        return RenderMode.Software;
+    }
+
     public static AppBuilder BuildAvaloniaApp()
         => BuildAvaloniaApp(Environment.GetCommandLineArgs());
 
     public static AppBuilder BuildAvaloniaApp(string[] args)
     {
-        var softwareRendering = IsSoftwareRenderingRequested(args);
-        AppLogger.LogInfo(softwareRendering
-            ? "Rendering configuration: Software Rendering enabled (Win32RenderingMode.Software, Win32CompositionMode.RedirectionSurface)."
-            : "Rendering configuration: Default Hardware Rendering (Win32RenderingMode.AngleEgl with Software fallback).");
+        var renderMode = GetEffectiveRenderMode(args);
+        var isHardware = renderMode == RenderMode.Hardware;
+        AppLogger.LogInfo(isHardware
+            ? "Rendering configuration: Hardware Accelerated (Win32RenderingMode.AngleEgl with Software fallback)."
+            : "Rendering configuration: Default Software Rendering (Win32RenderingMode.Software, Win32CompositionMode.RedirectionSurface).");
 
         var builder = AppBuilder.Configure<App>()
             .UsePlatformDetect()
@@ -131,20 +180,20 @@ public class Program
 
         if (OperatingSystem.IsWindows())
         {
-            if (softwareRendering)
+            if (isHardware)
             {
                 builder.With(new Win32PlatformOptions
                 {
-                    RenderingMode = [Win32RenderingMode.Software],
-                    CompositionMode = [Win32CompositionMode.RedirectionSurface]
+                    RenderingMode = [Win32RenderingMode.AngleEgl, Win32RenderingMode.Software],
+                    CompositionMode = [Win32CompositionMode.WinUIComposition, Win32CompositionMode.DirectComposition, Win32CompositionMode.RedirectionSurface]
                 });
             }
             else
             {
                 builder.With(new Win32PlatformOptions
                 {
-                    RenderingMode = [Win32RenderingMode.AngleEgl, Win32RenderingMode.Software],
-                    CompositionMode = [Win32CompositionMode.WinUIComposition, Win32CompositionMode.DirectComposition, Win32CompositionMode.RedirectionSurface]
+                    RenderingMode = [Win32RenderingMode.Software],
+                    CompositionMode = [Win32CompositionMode.RedirectionSurface]
                 });
             }
         }

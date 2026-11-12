@@ -44,6 +44,83 @@ public class Milestone46OptimizationTests
         }
     }
 
+    [Theory]
+    [InlineData(new[] { "--hardware-rendering" }, true)]
+    [InlineData(new[] { "--hardware" }, true)]
+    [InlineData(new[] { "--render-mode=hardware" }, true)]
+    [InlineData(new[] { "--render-mode", "hardware" }, true)]
+    [InlineData(new[] { "--other-flag" }, false)]
+    [InlineData(new string[0], false)]
+    public void IsHardwareRenderingRequested_CommandLineArguments_EvaluatedCorrectly(string[] args, bool expected)
+    {
+        var origRender = Environment.GetEnvironmentVariable("VICTUS_RENDER_MODE");
+        var origHardware = Environment.GetEnvironmentVariable("VICTUS_HARDWARE_RENDERING");
+        try
+        {
+            Environment.SetEnvironmentVariable("VICTUS_RENDER_MODE", null);
+            Environment.SetEnvironmentVariable("VICTUS_HARDWARE_RENDERING", null);
+
+            var actual = Program.IsHardwareRenderingRequested(args);
+            Assert.Equal(expected, actual);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("VICTUS_RENDER_MODE", origRender);
+            Environment.SetEnvironmentVariable("VICTUS_HARDWARE_RENDERING", origHardware);
+        }
+    }
+
+    [Fact]
+    public void IsHardwareRenderingRequested_EnvironmentVariable_EvaluatedCorrectly()
+    {
+        var origRender = Environment.GetEnvironmentVariable("VICTUS_RENDER_MODE");
+        var origHardware = Environment.GetEnvironmentVariable("VICTUS_HARDWARE_RENDERING");
+        try
+        {
+            Environment.SetEnvironmentVariable("VICTUS_RENDER_MODE", "hardware");
+            Assert.True(Program.IsHardwareRenderingRequested(Array.Empty<string>()));
+
+            Environment.SetEnvironmentVariable("VICTUS_RENDER_MODE", "software");
+            Assert.False(Program.IsHardwareRenderingRequested(Array.Empty<string>()));
+
+            Environment.SetEnvironmentVariable("VICTUS_RENDER_MODE", null);
+            Environment.SetEnvironmentVariable("VICTUS_HARDWARE_RENDERING", "1");
+            Assert.True(Program.IsHardwareRenderingRequested(Array.Empty<string>()));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("VICTUS_RENDER_MODE", origRender);
+            Environment.SetEnvironmentVariable("VICTUS_HARDWARE_RENDERING", origHardware);
+        }
+    }
+
+    [Fact]
+    public void GetEffectiveRenderMode_DefaultsToSoftware_UnlessHardwareRequested()
+    {
+        var origRender = Environment.GetEnvironmentVariable("VICTUS_RENDER_MODE");
+        var origHardware = Environment.GetEnvironmentVariable("VICTUS_HARDWARE_RENDERING");
+        try
+        {
+            Environment.SetEnvironmentVariable("VICTUS_RENDER_MODE", null);
+            Environment.SetEnvironmentVariable("VICTUS_HARDWARE_RENDERING", null);
+
+            // Default on Windows is Software
+            Assert.Equal(Program.RenderMode.Software, Program.GetEffectiveRenderMode(Array.Empty<string>()));
+
+            // Explicit software request remains Software
+            Assert.Equal(Program.RenderMode.Software, Program.GetEffectiveRenderMode(new[] { "--software-rendering" }));
+
+            // Explicit hardware request activates Hardware
+            Assert.Equal(Program.RenderMode.Hardware, Program.GetEffectiveRenderMode(new[] { "--hardware-rendering" }));
+            Assert.Equal(Program.RenderMode.Hardware, Program.GetEffectiveRenderMode(new[] { "--hardware" }));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("VICTUS_RENDER_MODE", origRender);
+            Environment.SetEnvironmentVariable("VICTUS_HARDWARE_RENDERING", origHardware);
+        }
+    }
+
     [Fact]
     public void IsSoftwareRenderingRequested_EnvironmentVariable_EvaluatedCorrectly()
     {
