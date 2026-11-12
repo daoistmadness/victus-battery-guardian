@@ -1,0 +1,215 @@
+name: Preview Release Promotion
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: 'GitHub Actions CI Run ID on main branch to promote (e.g. 43181446772)'
+        required: true
+        type: string
+      commit_sha:
+        description: 'Expected commit SHA on main (optional, verifies artifact provenance)'
+        required: false
+        type: string
+      prerelease_suffix:
+        description: 'Preview tag suffix namespace (default: preview)'
+        required: false
+        type: string
+        default: 'preview'
+      publish:
+        description: 'Publish as GitHub Prerelease (false = create and retain as Draft)'
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: preview-release-${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  promote-preview:
+    name: Promote CI Artifact to Preview Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Verify CI Workflow Run & Provenance
+        id: verify_run
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_ID: ${{ github.event.inputs.run_id }}
+          EXPECTED_SHA: ${{ github.event.inputs.commit_sha }}
+        run: |
+          echo "Inspecting GitHub Actions workflow run: ${RUN_ID}..."
+          RUN_DATA=$(gh run view "${RUN_ID}" --json status,conclusion,headBranch,headSha,workflowName)
+          echo "Run details: ${RUN_DATA}"
+
+          RUN_STATUS=$(echo "${RUN_DATA}" | jq -r .status)
+          RUN_CONCLUSION=$(echo "${RUN_DATA}" | jq -r .conclusion)
+          HEAD_BRANCH=$(echo "${RUN_DATA}" | jq -r .headBranch)
+          HEAD_SHA=$(echo "${RUN_DATA}" | jq -r .headSha)
+
+          if [ "${RUN_STATUS}" != "completed" ]; then
+            echo "ERROR: Target CI run status is '${RUN_STATUS}' (expected 'completed')."
+            exit 1
+          fi
+
+          if [ "${RUN_CONCLUSION}" != "success" ]; then
+            echo "ERROR: Target CI run conclusion is '${RUN_CONCLUSION}' (expected 'success')."
+            exit 1
+          fi
+
+          if [ "${HEAD_BRANCH}" != "main" ]; then
+            echo "ERROR: Target CI run branch is '${HEAD_BRANCH}'. Only runs from protected 'main' can be promoted to release."
+            exit 1
+          fi
+
+          if [ -n "${EXPECTED_SHA}" ]; then
+            case "${HEAD_SHA}" in
+              "${EXPECTED_SHA}"*)
+                echo "Commit SHA matches expected prefix: ${EXPECTED_SHA}"
+                ;;
+              *)
+                echo "ERROR: Target CI run commit ${HEAD_SHA} does not match expected SHA ${EXPECTED_SHA}."
+                exit 1
+                ;;
+            esac
+          fi
+
+          HEAD_SHORT=$(echo "${HEAD_SHA}" | cut -c1-7)
+          echo "head_sha=${HEAD_SHA}" >> "$GITHUB_OUTPUT"
+          echo "head_short=${HEAD_SHORT}" >> "$GITHUB_OUTPUT"
+
+      - name: Download Candidate Package from CI Run
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_ID: ${{ github.event.inputs.run_id }}
+        run: |
+          mkdir -p candidate-artifacts
+          gh run download "${RUN_ID}" -n victus-guardian-win-x64-validation-package -D candidate-artifacts
+          ls -la candidate-artifacts/
+
+      - name: Verify Candidate Package & Integrity (No Rebuild)
+        run: |
+          pwsh -File ./scripts/verify-draft.ps1 -ArtifactsDir candidate-artifacts
+
+      - name: Extract Metadata & Determine Preview Tag
+        id: meta
+        run: |
+          PACKSLIP_FILE=$(ls candidate-artifacts/*packslip.json | head -n 1)
+          VERSION=$(jq -r .version "${PACKSLIP_FILE}")
+          COMMIT_SHA="${{ steps.verify_run.outputs.head_sha }}"
+          COMMIT_SHORT="${{ steps.verify_run.outputs.head_short }}"
+          SUFFIX="${{ github.event.inputs.prerelease_suffix }}"
+          PREVIEW_TAG="v${VERSION}-${SUFFIX}.${COMMIT_SHORT}"
+          RELEASE_TITLE="Victus Battery Guardian v${VERSION} Preview (${COMMIT_SHORT})"
+
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "preview_tag=${PREVIEW_TAG}" >> "$GITHUB_OUTPUT"
+          echo "release_title=${RELEASE_TITLE}" >> "$GITHUB_OUTPUT"
+          echo "packslip_file=${PACKSLIP_FILE}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate Release Notes
+        run: |
+          node scripts/generate-release-notes.mjs \
+            --version "${{ steps.meta.outputs.version }}" \
+            --preview \
+            --commit "${{ steps.verify_run.outputs.head_sha }}" \
+            --out preview-notes.md
+          cat preview-notes.md
+
+      - name: Check for Conflicting Duplicate Release
+        id: check_conflict
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PREVIEW_TAG: ${{ steps.meta.outputs.preview_tag }}
+        run: |
+          if gh release view "${PREVIEW_TAG}" --json isDraft,tagName > release_info.json 2>/dev/null; then
+            IS_DRAFT=$(jq -r .isDraft release_info.json)
+            if [ "${IS_DRAFT}" = "false" ]; then
+              echo "ERROR: Release '${PREVIEW_TAG}' already exists and is published. Duplicate conflicting release is prohibited."
+              exit 1
+            else
+              echo "Existing draft release found for '${PREVIEW_TAG}'. Will update assets and notes with safe retry."
+              echo "exists_draft=true" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "No existing release found for '${PREVIEW_TAG}'."
+            echo "exists_draft=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create or Update Draft Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PREVIEW_TAG: ${{ steps.meta.outputs.preview_tag }}
+          TARGET_SHA: ${{ steps.verify_run.outputs.head_sha }}
+          RELEASE_TITLE: ${{ steps.meta.outputs.release_title }}
+          EXISTS_DRAFT: ${{ steps.check_conflict.outputs.exists_draft }}
+        run: |
+          if [ "${EXISTS_DRAFT}" = "true" ]; then
+            echo "Updating existing draft release ${PREVIEW_TAG}..."
+            gh release edit "${PREVIEW_TAG}" \
+              --title "${RELEASE_TITLE}" \
+              --notes-file preview-notes.md \
+              --draft \
+              --prerelease
+          else
+            echo "Creating new draft preview release ${PREVIEW_TAG}..."
+            gh release create "${PREVIEW_TAG}" \
+              --target "${TARGET_SHA}" \
+              --title "${RELEASE_TITLE}" \
+              --notes-file preview-notes.md \
+              --draft \
+              --prerelease \
+              --latest=false
+          fi
+
+      - name: Upload Candidate Assets (Safe Retry / Clobber)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PREVIEW_TAG: ${{ steps.meta.outputs.preview_tag }}
+        run: |
+          echo "Uploading candidate assets to draft release ${PREVIEW_TAG}..."
+          gh release upload "${PREVIEW_TAG}" \
+            candidate-artifacts/*.zip \
+            candidate-artifacts/*.sha256 \
+            candidate-artifacts/*packslip.json \
+            --clobber
+          echo "Assets uploaded successfully."
+
+      - name: Finalize Publication (Gatekeeper)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PREVIEW_TAG: ${{ steps.meta.outputs.preview_tag }}
+          PUBLISH: ${{ github.event.inputs.publish }}
+        run: |
+          if [ "${PUBLISH}" = "true" ]; then
+            echo "Operator requested immediate publication. Promoting draft to published pre-release..."
+            gh release edit "${PREVIEW_TAG}" --draft=false
+            echo "PREVIEW RELEASE PUBLISHED: https://github.com/${{ github.repository }}/releases/tag/${PREVIEW_TAG}"
+          else
+            echo "=========================================================================="
+            echo "PREVIEW DRAFT CREATED: https://github.com/${{ github.repository }}/releases/tag/${PREVIEW_TAG}"
+            echo "Status: DRAFT PRE-RELEASE (Not visible publicly until explicitly published)."
+            echo "Review assets, manifest, and checksums in GitHub web UI or via:"
+            echo "  gh release view ${PREVIEW_TAG}"
+            echo "To publish when authorized:"
+            echo "  gh release edit ${PREVIEW_TAG} --draft=false"
+            echo "=========================================================================="
+          fi

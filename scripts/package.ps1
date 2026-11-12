@@ -33,6 +33,16 @@ if ($CandidatePackage) {
 }
 Write-Host "=================================================="
 
+$gitCommit = "initial-commit"
+try {
+    $commitOutput = git rev-parse --short HEAD 2>$null
+    if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($commitOutput)) {
+        $gitCommit = $commitOutput.Trim()
+    }
+} catch {
+    $gitCommit = "uncommitted"
+}
+
 # Ensure output directory exists and purge stale artifacts for this version
 if (-not (Test-Path $OutputDir)) {
     New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
@@ -100,16 +110,28 @@ if ($CandidatePackage) {
         throw "Published executable not found at: $exePath"
     }
 
-    # A. Staging User Package (Clean: exe + README + LICENSE only)
+    # A. Staging User Package (Clean: exe + README + LICENSE + VERSION.txt only)
     Write-Host "Preparing User Package staging (excluding PDBs, scripts, and internal docs)..."
     Copy-Item $exePath -Destination $userStaging
     if (Test-Path "README.md") { Copy-Item "README.md" -Destination $userStaging }
     if (Test-Path "LICENSE") { Copy-Item "LICENSE" -Destination $userStaging }
 
+    $versionInfo = @"
+Product:            Victus Battery Guardian
+Version:            $Version
+Git Commit:         $gitCommit
+Target Runtime:     win-x64
+Package Type:       Portable Self-Contained (.zip)
+Default Renderer:   Software (Win32RenderingMode.Software via GDI RedirectionSurface)
+Hardware Override:  --hardware-rendering or VICTUS_RENDER_MODE=hardware
+Built At (UTC):     $([DateTime]::UtcNow.ToString("o"))
+"@
+    $versionInfo | Out-File -FilePath (Join-Path $userStaging "VERSION.txt") -Encoding utf8
+
     Write-Host "Creating user release archive: $userZipFilePath..."
     Compress-Archive -Path "$userStaging/*" -DestinationPath $userZipFilePath -Force
 
-    # B. Staging Diagnostics Package (PDBs + validation script + validation guides)
+    # B. Staging Diagnostics Package (PDBs + validation script + validation guides + VERSION.txt)
     Write-Host "Preparing Diagnostics Package staging..."
     Get-ChildItem -Path $buildStaging -Filter "*.pdb" | ForEach-Object {
         Copy-Item $_.FullName -Destination $diagStaging
@@ -119,6 +141,7 @@ if ($CandidatePackage) {
     if (Test-Path "docs/RELEASE_AND_PACKSLIP.md") { Copy-Item "docs/RELEASE_AND_PACKSLIP.md" -Destination $diagStaging }
     if (Test-Path "README.md") { Copy-Item "README.md" -Destination $diagStaging }
     if (Test-Path "LICENSE") { Copy-Item "LICENSE" -Destination $diagStaging }
+    $versionInfo | Out-File -FilePath (Join-Path $diagStaging "VERSION.txt") -Encoding utf8
 
     Write-Host "Creating diagnostics archive: $diagZipFilePath..."
     Compress-Archive -Path "$diagStaging/*" -DestinationPath $diagZipFilePath -Force
@@ -174,16 +197,6 @@ $diagHash = $null
 if (Test-Path $diagZipFilePath) {
     $diagHash = (Get-FileHash -Path $diagZipFilePath -Algorithm SHA256).Hash.ToLowerInvariant()
     "$diagHash  $diagZipFileName" | Out-File -FilePath "$diagZipFilePath.sha256" -Encoding utf8
-}
-
-$gitCommit = "initial-commit"
-try {
-    $commitOutput = git rev-parse --short HEAD 2>$null
-    if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($commitOutput)) {
-        $gitCommit = $commitOutput.Trim()
-    }
-} catch {
-    $gitCommit = "uncommitted"
 }
 
 # Packslip manifest - Checksum-only draft; explicitly marked as unsigned pending Sigstore integration
