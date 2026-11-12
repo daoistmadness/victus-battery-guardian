@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/VictusGuardian.App/VictusGuardian.App.csproj" />
+    <Project Path="src/VictusGuardian.Core/VictusGuardian.Core.csproj" />
+    <Project Path="src/VictusGuardian.Storage/VictusGuardian.Storage.csproj" />
+    <Project Path="src/VictusGuardian.Windows/VictusGuardian.Windows.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/VictusGuardian.UnitTests/VictusGuardian.UnitTests.csproj" />
+    <Project Path="tests/VictusGuardian.WindowsTests/VictusGuardian.WindowsTests.csproj" />
+  </Folder>
+</Solution>

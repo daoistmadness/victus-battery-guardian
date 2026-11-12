@@ -1,0 +1,105 @@
+name: CI & Release Pipeline
+
+on:
+  push:
+    branches:
+      - main
+      - 'chore/**'
+      - 'feat/**'
+      - 'fix/**'
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  test-linux:
+    name: Build & Test (Ubuntu Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET SDK 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore Dependencies
+        run: dotnet restore VictusBatteryGuardian.slnx
+
+      - name: Build Solution (Release)
+        run: dotnet build VictusBatteryGuardian.slnx --no-restore -c Release
+
+      - name: Run Tests
+        run: dotnet test VictusBatteryGuardian.slnx --no-build -c Release --verbosity normal
+
+  test-windows:
+    name: Build & Test (Windows 11 Runner)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET SDK 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore Dependencies
+        run: dotnet restore VictusBatteryGuardian.slnx
+
+      - name: Build Solution (Release)
+        run: dotnet build VictusBatteryGuardian.slnx --no-restore -c Release
+
+      - name: Run Tests (Including Windows Telemetry)
+        run: dotnet test VictusBatteryGuardian.slnx --no-build -c Release --verbosity normal
+
+  release:
+    name: Semantic Release & Packslip Verification
+    needs: [test-linux, test-windows]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Setup .NET SDK 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Verify Packaging Script Locally
+        run: |
+          pwsh -File ./scripts/package.ps1 -Version 0.0.0-ci -OutputDir artifacts-ci
+          pwsh -File ./scripts/verify-draft.ps1 -ArtifactsDir artifacts-ci
+          rm -rf artifacts-ci
+
+      - name: Run Semantic Release (Draft Mode)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx semantic-release

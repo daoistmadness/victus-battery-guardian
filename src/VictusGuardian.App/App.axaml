@@ -1,0 +1,38 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="using:VictusGuardian.App"
+             x:Class="VictusGuardian.App.App"
+             RequestedThemeVariant="Dark">
+  <Application.Styles>
+    <FluentTheme />
+  </Application.Styles>
+
+  <Application.Resources>
+    <!-- Dark Navy, Charcoal, and Victus Green Color Palette -->
+    <Color x:Key="AppBackground">#0B0E14</Color>
+    <Color x:Key="CardBackground">#151C28</Color>
+    <Color x:Key="CardBorder">#222D40</Color>
+    <Color x:Key="SidebarBackground">#101520</Color>
+    <Color x:Key="AccentGreen">#00E676</Color>
+    <Color x:Key="AccentGreenHover">#00C853</Color>
+    <Color x:Key="AccentCyan">#00E5FF</Color>
+    <Color x:Key="DemoBadgeBackground">#FF9100</Color>
+    <Color x:Key="DemoBadgeForeground">#000000</Color>
+    <Color x:Key="TextPrimary">#F1F5F9</Color>
+    <Color x:Key="TextSecondary">#94A3B8</Color>
+    <Color x:Key="TextMuted">#64748B</Color>
+
+    <SolidColorBrush x:Key="AppBackgroundBrush" Color="{StaticResource AppBackground}" />
+    <SolidColorBrush x:Key="CardBackgroundBrush" Color="{StaticResource CardBackground}" />
+    <SolidColorBrush x:Key="CardBorderBrush" Color="{StaticResource CardBorder}" />
+    <SolidColorBrush x:Key="SidebarBackgroundBrush" Color="{StaticResource SidebarBackground}" />
+    <SolidColorBrush x:Key="AccentGreenBrush" Color="{StaticResource AccentGreen}" />
+    <SolidColorBrush x:Key="AccentGreenHoverBrush" Color="{StaticResource AccentGreenHover}" />
+    <SolidColorBrush x:Key="AccentCyanBrush" Color="{StaticResource AccentCyan}" />
+    <SolidColorBrush x:Key="DemoBadgeBackgroundBrush" Color="{StaticResource DemoBadgeBackground}" />
+    <SolidColorBrush x:Key="DemoBadgeForegroundBrush" Color="{StaticResource DemoBadgeForeground}" />
+    <SolidColorBrush x:Key="TextPrimaryBrush" Color="{StaticResource TextPrimary}" />
+    <SolidColorBrush x:Key="TextSecondaryBrush" Color="{StaticResource TextSecondary}" />
+    <SolidColorBrush x:Key="TextMutedBrush" Color="{StaticResource TextMuted}" />
+  </Application.Resources>
+</Application>
