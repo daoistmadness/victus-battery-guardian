@@ -14,5 +14,7 @@ public record BatteryReadingRecord
     public double? DesignCapacityMwh { get; init; }
     public double? ChargeRateMilliwatts { get; init; }
     public int? CycleCount { get; init; }
+    public double? VoltageMillivolts { get; init; }
+    public string? ProviderSource { get; init; }
     public required bool IsSimulated { get; init; }
 }

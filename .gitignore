@@ -40,3 +40,9 @@ yarn-error.log*
 # Operating System files
 .DS_Store
 Thumbs.db
+
+# Hardware acceptance & diagnostic outputs (strictly local)
+diagnostics-output/
+battery-report*.html
+hardware-acceptance-report*
+diagnostic-*.json

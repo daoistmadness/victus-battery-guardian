@@ -13,8 +13,10 @@
 
 **Victus Battery Guardian** is an unprivileged desktop application tailored specifically for HP Victus 15.6 laptops running Windows 11. It delivers precise battery telemetry, lithium health tracking, charge/discharge wattage monitoring, and longevity notifications to prevent unnecessary battery degradation.
 
-> **Current Status (Milestone 1 — Foundation & Bootstrap):**
-> The application shell is fully operational and currently operates in an explicitly labeled **Demo Mode** using simulated telemetry (calibrated to the HP Victus 70 Wh battery profile). Physical hardware sensor queries (IOCTL / WMI) will be introduced in Milestone 2.
+> **Current Status (Milestone 2 — Windows Telemetry & CI Readiness):**
+> Real, read-only Windows battery telemetry is implemented via direct device interface queries (`SetupAPI` enumeration + `IOCTL_BATTERY_QUERY_*`).
+> The application uses a multi-tier composite telemetry architecture with safe fallback to `GetSystemPowerStatus`, explicit `Demo Mode` controls, unmanaged handle lifecycle management, and sleep/resume resilience.
+> Release readiness is established with explicit unsigned packslip declarations and production publish gates.
 
 ---
 
@@ -25,20 +27,33 @@ The solution strictly isolates platform-independent business logic from OS-speci
 ```
 VictusBatteryGuardian.slnx
 ├── src/
-│   ├── VictusGuardian.Core/       # Domain models, health algorithms, alert evaluation (Zero OS dependencies)
-│   ├── VictusGuardian.Storage/    # SQLite WAL persistence with idle-write throttling
-│   ├── VictusGuardian.Windows/    # Windows Win32 API power status & future IOCTL battery hooks
+│   ├── VictusGuardian.Core/       # Domain models, provenance types, health algorithms, alert evaluation
+│   ├── VictusGuardian.Storage/    # SQLite WAL persistence with v1 -> v2 schema migrations & idle write throttling
+│   ├── VictusGuardian.Windows/    # SetupAPI enumeration, IOCTL direct battery interface, Win32 fallback, power events
 │   └── VictusGuardian.App/        # Avalonia UI desktop application (Navy/Charcoal/Green MVVM shell)
-└── tests/
-    ├── VictusGuardian.UnitTests/   # Unit tests for Core & Storage (100% Linux/CI compatible)
-    └── VictusGuardian.WindowsTests/# Integration tests with platform guards for Windows runners
+├── tests/
+│   ├── VictusGuardian.UnitTests/   # Unit tests with INativeBatteryDeviceApi mocks (100% Linux/CI compatible)
+│   └── VictusGuardian.WindowsTests/# Integration tests with skippable physical target guards
+└── docs/
+    ├── HARDWARE_VALIDATION.md     # Reproducible physical HP Victus validation checklist
+    └── RELEASE_AND_PACKSLIP.md    # Packslip manifest and Sigstore keyless signing architecture
 ```
 
-### Key Design Principles:
-1. **Telemetry Provenance**: Every metric is wrapped in `TelemetryValue<T>` with explicit provenance (`Reported`, `Estimated`, `Unavailable`, `Simulated`). Simulated data can **never** masquerade as live hardware telemetry.
-2. **Idle Disk Protection**: SQLite storage operates in WAL mode with write throttling; identical telemetry states during idle battery usage are suppressed to protect SSD endurance.
-3. **No Elevation Required**: The application runs completely unprivileged (`asInvoker` manifest).
-4. **Cross-Platform Compilation**: The entire solution—including the Windows platform library and self-contained Windows x64 single-file executable—builds directly on Linux workstations and CI agents.
+### Telemetry Provider Hierarchy:
+1. **Tier 1 (Preferred):** Direct Device IOCTL (`IOCTL_BATTERY_QUERY_TAG`, `IOCTL_BATTERY_QUERY_INFORMATION`, `IOCTL_BATTERY_QUERY_STATUS`). Delivers remaining capacity (mWh), full charge capacity (mWh), factory design capacity (mWh), instantaneous voltage (mV), signed charge/discharge rate (mW), cycle count, and device identities.
+2. **Tier 2 (Fallback):** Win32 `GetSystemPowerStatus`. Provides AC line state, charging flag, and battery life percentage if IOCTL device queries fail.
+3. **Tier 3 (Terminal):** Explicit `Telemetry Unavailable` state. The application **NEVER** silently falls back to simulated data.
+4. **Demo Mode:** Available **only** when explicitly enabled by the user in Settings for evaluation and UI testing.
+
+---
+
+## Key Design & Safety Principles
+
+1. **Strict Provenance Guarantees**: Every metric is wrapped in `TelemetryValue<T>` with explicit provenance (`Reported`, `Estimated`, `Unavailable`, `Simulated`).
+2. **No Elevation Required**: Runs entirely in unprivileged user space (`asInvoker`).
+3. **Battery Replacement & Sleep Resilience**: Battery tags are monitored for changes (indicating battery replacement). Windows suspend/resume events safely clear caches and refresh hardware handles.
+4. **Transparent Packaging**: The Packslip manifest explicitly records `isSigned: false` to accurately represent checksum-only verification pending Sigstore OIDC keyless signing.
+5. **Cross-Platform Compilation**: The entire solution—including Windows native P/Invoke libraries and self-contained win-x64 single-file packages—builds cleanly on Linux development workstations.
 
 ---
 
@@ -52,7 +67,7 @@ VictusBatteryGuardian.slnx
 ### Build Solution
 ```bash
 dotnet restore VictusBatteryGuardian.slnx
-dotnet build VictusBatteryGuardian.slnx -c Release
+dotnet build VictusBatteryGuardian.slnx -c Release --warnaserror
 ```
 
 ### Run Tests
@@ -61,9 +76,8 @@ dotnet test VictusBatteryGuardian.slnx -c Release
 ```
 
 ### Publish Self-Contained Windows x64 Binary
-You can generate the Windows single-file executable directly from Ubuntu or Windows:
 ```bash
-pwsh -File ./scripts/package.ps1 -Version 0.1.0 -OutputDir artifacts
+pwsh -File ./scripts/package.ps1 -Version 0.2.0-beta -OutputDir artifacts
 ```
 
 ### Verify Draft Release Artifacts
@@ -73,17 +87,6 @@ pwsh -File ./scripts/verify-draft.ps1 -ArtifactsDir artifacts
 
 ---
 
-## Release Pipeline & Safety Policy
+## Physical Hardware Validation
 
-Victus Battery Guardian follows a **draft-first, verified-packslip** release architecture:
-1. Feature branches and PRs run CI build and test matrices on both Ubuntu and Windows runners.
-2. Merges to `main` evaluate commits using [Conventional Commits](https://www.conventionalcommits.org/).
-3. Semantic-release builds the self-contained Windows package, calculates SHA-256 hashes, generates `packslip.json`, and publishes a **draft** release on GitHub.
-4. Draft releases undergo packslip verification before final publication.
-5. **Release Safety Policy**: No rebuilding occurs between the verified release artifact and publication.
-
----
-
-## License
-
-MIT License. See [LICENSE](LICENSE) for details.
+Before claiming physical hardware validation, follow the protocol documented in [`docs/HARDWARE_VALIDATION.md`](docs/HARDWARE_VALIDATION.md) on an actual HP Victus 15.6 laptop running Windows 11.

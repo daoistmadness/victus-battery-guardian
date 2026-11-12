@@ -4,26 +4,50 @@ on:
   push:
     branches:
       - main
-      - 'chore/**'
+      - chore/foundation-bootstrap
       - 'feat/**'
       - 'fix/**'
   pull_request:
     branches:
       - main
 
-permissions:
-  contents: write
-  issues: write
-  pull-requests: write
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  cancel-in-progress: true
 
 jobs:
+  version:
+    name: Compute Target Version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.calc_version.outputs.version }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Calculate Next Version
+        id: calc_version
+        run: node scripts/get-next-version.mjs --github-output
+
   test-linux:
     name: Build & Test (Ubuntu Linux)
+    needs: [version]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -38,15 +62,29 @@ jobs:
       - name: Restore Dependencies
         run: dotnet restore VictusBatteryGuardian.slnx
 
-      - name: Build Solution (Release)
-        run: dotnet build VictusBatteryGuardian.slnx --no-restore -c Release
+      - name: Build Solution (Debug)
+        run: dotnet build VictusBatteryGuardian.slnx --no-restore -c Debug --warnaserror
 
-      - name: Run Tests
-        run: dotnet test VictusBatteryGuardian.slnx --no-build -c Release --verbosity normal
+      - name: Run Unit Tests
+        run: dotnet test VictusBatteryGuardian.slnx --no-build -c Debug --verbosity normal
+
+      - name: Package Candidate Windows x64 Binary
+        run: |
+          pwsh -File ./scripts/package.ps1 -Version ${{ needs.version.outputs.version }} -OutputDir artifacts-ci
+          pwsh -File ./scripts/verify-draft.ps1 -ArtifactsDir artifacts-ci
+
+      - name: Upload Windows x64 Validation Package (Artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: victus-guardian-win-x64-validation-package
+          path: artifacts-ci/
+          retention-days: 7
 
   test-windows:
-    name: Build & Test (Windows 11 Runner)
+    name: Build & Test (Windows Server)
     runs-on: windows-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -68,10 +106,16 @@ jobs:
         run: dotnet test VictusBatteryGuardian.slnx --no-build -c Release --verbosity normal
 
   release:
-    name: Semantic Release & Packslip Verification
-    needs: [test-linux, test-windows]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    name: Semantic Release & Packslip Publishing
+    needs: [version, test-linux, test-windows]
+    # Releases require protected main branch and explicit administrator authorization via repo variable
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.ENABLE_PRODUCTION_RELEASE == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+      id-token: write # Required for keyless Sigstore OIDC cosign signing
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -93,13 +137,14 @@ jobs:
       - name: Install Dependencies
         run: npm ci
 
-      - name: Verify Packaging Script Locally
-        run: |
-          pwsh -File ./scripts/package.ps1 -Version 0.0.0-ci -OutputDir artifacts-ci
-          pwsh -File ./scripts/verify-draft.ps1 -ArtifactsDir artifacts-ci
-          rm -rf artifacts-ci
+      - name: Download Candidate Package from CI
+        uses: actions/download-artifact@v4
+        with:
+          name: victus-guardian-win-x64-validation-package
+          path: candidate-artifacts
 
-      - name: Run Semantic Release (Draft Mode)
+      - name: Run Semantic Release (Promoting Immutable Candidate)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CANDIDATE_PACKAGE: candidate-artifacts/VictusGuardian-v${{ needs.version.outputs.version }}-win-x64.zip
         run: npx semantic-release

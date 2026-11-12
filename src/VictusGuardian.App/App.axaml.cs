@@ -32,14 +32,13 @@ public partial class App : Application
         services.AddSingleton<IBatteryAlertEvaluator, DefaultBatteryAlertEvaluator>();
         services.AddSingleton<SimulatedBatteryTelemetryProvider>();
         services.AddSingleton<ISimulatedBatteryService>(sp => sp.GetRequiredService<SimulatedBatteryTelemetryProvider>());
-        // Milestone 1 uses Simulated provider for Demo Mode
-        services.AddSingleton<IBatteryTelemetryProvider>(sp => sp.GetRequiredService<SimulatedBatteryTelemetryProvider>());
 
         // 2. Storage Services
         services.AddSingleton<IBatteryHistoryRepository, SqliteBatteryHistoryRepository>();
 
-        // 3. Windows Services
+        // 3. Windows Services & Composite Provider (preferred IOCTL -> fallback Win32 -> unavailable)
         services.AddWindowsGuardianServices();
+        services.AddSingleton<IBatteryTelemetryProvider>(sp => sp.GetRequiredService<ICompositeBatteryTelemetryProvider>());
 
         // 4. ViewModels
         services.AddSingleton<DashboardViewModel>();

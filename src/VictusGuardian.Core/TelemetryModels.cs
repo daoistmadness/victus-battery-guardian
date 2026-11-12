@@ -58,7 +58,9 @@ public enum SensorCapabilities
     DesignCapacity = 1 << 5,
     ChargeRate = 1 << 6,
     CycleCount = 1 << 7,
-    All = Percentage | PowerStatus | ChargingState | RemainingCapacity | FullChargeCapacity | DesignCapacity | ChargeRate | CycleCount
+    Voltage = 1 << 8,
+    BatteryIdentity = 1 << 9,
+    All = Percentage | PowerStatus | ChargingState | RemainingCapacity | FullChargeCapacity | DesignCapacity | ChargeRate | CycleCount | Voltage | BatteryIdentity
 }
 
 /// <summary>
@@ -103,6 +105,16 @@ public record BatteryReading
     public TelemetryValue<double> DesignCapacityMwh { get; init; } = TelemetryValue<double>.Unavailable;
     public TelemetryValue<double> ChargeRateMilliwatts { get; init; } = TelemetryValue<double>.Unavailable;
     public TelemetryValue<int> CycleCount { get; init; } = TelemetryValue<int>.Unavailable;
+    public TelemetryValue<double> VoltageMillivolts { get; init; } = TelemetryValue<double>.Unavailable;
+    public TelemetryValue<string> BatteryName { get; init; } = TelemetryValue<string>.Unavailable;
+    public TelemetryValue<string> Manufacturer { get; init; } = TelemetryValue<string>.Unavailable;
+    public TelemetryValue<string> SerialNumber { get; init; } = TelemetryValue<string>.Unavailable;
+    public TelemetryValue<string> Chemistry { get; init; } = TelemetryValue<string>.Unavailable;
+
+    public uint? BatteryTag { get; init; }
+    public string? DevicePath { get; init; }
+    public bool IsStale { get; init; }
+    public string TelemetryProviderSource { get; init; } = "Unknown";
 
     /// <summary>True if any sensor reading is simulated (Demo Mode or testing).</summary>
     public bool IsSimulated => BatteryPercentage.IsSimulated ||
@@ -115,6 +127,11 @@ public record BatteryReading
     /// <summary>Discharge or charge power in Watts (absolute value).</summary>
     public double? RateInWatts => ChargeRateMilliwatts.HasValue
         ? Math.Abs(ChargeRateMilliwatts.Value) / 1000.0
+        : null;
+
+    /// <summary>Instantaneous voltage in Volts.</summary>
+    public double? VoltageInVolts => VoltageMillivolts.HasValue
+        ? VoltageMillivolts.Value / 1000.0
         : null;
 
     /// <summary>

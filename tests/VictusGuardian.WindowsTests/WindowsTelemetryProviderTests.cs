@@ -1,6 +1,10 @@
 using System;
 using System.Threading.Tasks;
 using VictusGuardian.Core.Models;
+using VictusGuardian.Core.Simulation;
+using VictusGuardian.Windows.Composite;
+using VictusGuardian.Windows.Native;
+using VictusGuardian.Windows.Power;
 using VictusGuardian.Windows.Telemetry;
 using Xunit;
 
@@ -11,21 +15,29 @@ public class WindowsTelemetryProviderTests
     [Fact]
     public async Task GetReadingAsync_OnLinux_GracefullyReturnsUnsupportedWithoutCrashing()
     {
-        var provider = new WindowsBatteryTelemetryProvider();
+        var nativeApi = OperatingSystem.IsWindows()
+            ? (INativeBatteryDeviceApi)new WindowsNativeBatteryDeviceApi()
+            : new UnsupportedNativeBatteryDeviceApi();
+
+        var ioctlReader = new WindowsIoctlBatteryReader(nativeApi);
+        var powerReader = new WindowsPowerStatusReader(nativeApi);
+        var simProvider = new SimulatedBatteryTelemetryProvider();
+        using var composite = new CompositeBatteryTelemetryProvider(ioctlReader, powerReader, simProvider);
 
         if (!OperatingSystem.IsWindows())
         {
-            Assert.False(provider.IsHardwareSupported);
+            Assert.False(composite.IsHardwareSupported);
 
-            var reading = await provider.GetReadingAsync();
+            var reading = await composite.GetReadingAsync();
             Assert.NotNull(reading);
             Assert.False(reading.BatteryPercentage.HasValue);
             Assert.Equal(SensorCapabilities.None, reading.AvailableSensors);
+            Assert.Contains("Telemetry Unavailable", reading.TelemetryProviderSource);
         }
         else
         {
-            Assert.True(provider.IsHardwareSupported);
-            var reading = await provider.GetReadingAsync();
+            Assert.True(composite.IsHardwareSupported);
+            var reading = await composite.GetReadingAsync();
             Assert.NotNull(reading);
         }
     }
@@ -39,8 +51,13 @@ public class WindowsTelemetryProviderTests
             return;
         }
 
-        var provider = new WindowsBatteryTelemetryProvider();
-        var reading = await provider.GetReadingAsync();
+        var nativeApi = new WindowsNativeBatteryDeviceApi();
+        var ioctlReader = new WindowsIoctlBatteryReader(nativeApi);
+        var powerReader = new WindowsPowerStatusReader(nativeApi);
+        var simProvider = new SimulatedBatteryTelemetryProvider();
+        using var composite = new CompositeBatteryTelemetryProvider(ioctlReader, powerReader, simProvider);
+
+        var reading = await composite.GetReadingAsync();
 
         Assert.NotNull(reading);
         // On physical Windows laptop with battery:
@@ -48,6 +65,7 @@ public class WindowsTelemetryProviderTests
         {
             Assert.True(reading.BatteryPercentage.IsReported);
             Assert.InRange(reading.BatteryPercentage.Value, 0.0, 100.0);
+            Assert.Contains("Windows", reading.TelemetryProviderSource);
         }
     }
 }

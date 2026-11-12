@@ -9,6 +9,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\VictusGuardian.Core\VictusGuardian.Core.csproj" />
     <ProjectReference Include="..\..\src\VictusGuardian.Storage\VictusGuardian.Storage.csproj" />
+    <ProjectReference Include="..\..\src\VictusGuardian.Windows\VictusGuardian.Windows.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -20,6 +20,7 @@ public class SqliteBatteryHistoryRepositoryTests : IDisposable
 
     public void Dispose()
     {
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
         if (File.Exists(_tempDbFile))
         {
             try { File.Delete(_tempDbFile); } catch { }
