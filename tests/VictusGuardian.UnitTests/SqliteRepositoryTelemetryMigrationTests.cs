@@ -99,9 +99,10 @@ public class SqliteRepositoryTelemetryMigrationTests
         }
         finally
         {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
             if (File.Exists(dbPath))
             {
-                File.Delete(dbPath);
+                try { File.Delete(dbPath); } catch { }
             }
         }
     }
