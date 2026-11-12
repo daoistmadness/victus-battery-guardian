@@ -21,6 +21,12 @@ public interface IBatteryHistoryRepository
 
     Task<IReadOnlyList<BatteryReadingRecord>> GetReadingsSinceAsync(DateTimeOffset since, CancellationToken cancellationToken = default);
 
+    Task<int> GetReadingCountSinceAsync(DateTimeOffset since, CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<BatteryReadingRecord>> GetDownsampledReadingsAsync(DateTimeOffset since, int maxBuckets = 100, CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<BatteryReadingRecord>> GetRecentReadingsSinceAsync(DateTimeOffset since, int limit = 100, CancellationToken cancellationToken = default);
+
     Task<int> PurgeOldReadingsAsync(DateTimeOffset olderThan, CancellationToken cancellationToken = default);
 
     // Charging Session Tracking

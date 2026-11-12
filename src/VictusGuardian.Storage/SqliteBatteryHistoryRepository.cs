@@ -275,6 +275,92 @@ public class SqliteBatteryHistoryRepository : IBatteryHistoryRepository
         return results;
     }
 
+    public async Task<int> GetReadingCountSinceAsync(DateTimeOffset since, CancellationToken cancellationToken = default)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(1) FROM BatteryTelemetry WHERE Timestamp >= $since;";
+        cmd.Parameters.AddWithValue("$since", since.ToString("o"));
+
+        var result = await cmd.ExecuteScalarAsync(cancellationToken);
+        return Convert.ToInt32(result);
+    }
+
+    public async Task<IReadOnlyList<BatteryReadingRecord>> GetRecentReadingsSinceAsync(DateTimeOffset since, int limit = 100, CancellationToken cancellationToken = default)
+    {
+        var results = new List<BatteryReadingRecord>();
+
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT Id, Timestamp, Percentage, IsAcConnected, ChargingState,
+                   RemainingCapacityMwh, FullChargeCapacityMwh, DesignCapacityMwh,
+                   ChargeRateMilliwatts, CycleCount, IsSimulated, VoltageMillivolts, ProviderSource
+            FROM BatteryTelemetry
+            WHERE Timestamp >= $since
+            ORDER BY Id DESC
+            LIMIT $limit;
+        ";
+        cmd.Parameters.AddWithValue("$since", since.ToString("o"));
+        cmd.Parameters.AddWithValue("$limit", limit);
+
+        using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            results.Add(ReadRecord(reader));
+        }
+
+        return results;
+    }
+
+    public async Task<IReadOnlyList<BatteryReadingRecord>> GetDownsampledReadingsAsync(DateTimeOffset since, int maxBuckets = 100, CancellationToken cancellationToken = default)
+    {
+        var totalCount = await GetReadingCountSinceAsync(since, cancellationToken);
+        if (totalCount <= maxBuckets)
+        {
+            return await GetReadingsSinceAsync(since, cancellationToken);
+        }
+
+        int stride = Math.Max(1, totalCount / maxBuckets);
+        var results = new List<BatteryReadingRecord>(Math.Min(totalCount, maxBuckets + 10));
+
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = @"
+            WITH Numbered AS (
+                SELECT Id, Timestamp, Percentage, IsAcConnected, ChargingState,
+                       RemainingCapacityMwh, FullChargeCapacityMwh, DesignCapacityMwh,
+                       ChargeRateMilliwatts, CycleCount, IsSimulated, VoltageMillivolts, ProviderSource,
+                       ROW_NUMBER() OVER (ORDER BY Timestamp ASC) as RowNum
+                FROM BatteryTelemetry
+                WHERE Timestamp >= $since
+            )
+            SELECT Id, Timestamp, Percentage, IsAcConnected, ChargingState,
+                   RemainingCapacityMwh, FullChargeCapacityMwh, DesignCapacityMwh,
+                   ChargeRateMilliwatts, CycleCount, IsSimulated, VoltageMillivolts, ProviderSource
+            FROM Numbered
+            WHERE RowNum % $stride = 0 OR RowNum = 1 OR RowNum = $totalCount
+            ORDER BY Timestamp ASC;
+        ";
+        cmd.Parameters.AddWithValue("$since", since.ToString("o"));
+        cmd.Parameters.AddWithValue("$stride", stride);
+        cmd.Parameters.AddWithValue("$totalCount", totalCount);
+
+        using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            results.Add(ReadRecord(reader));
+        }
+
+        return results;
+    }
+
     public async Task<int> PurgeOldReadingsAsync(DateTimeOffset olderThan, CancellationToken cancellationToken = default)
     {
         await using var connection = new SqliteConnection(_connectionString);

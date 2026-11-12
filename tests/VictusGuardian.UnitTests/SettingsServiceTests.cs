@@ -18,12 +18,17 @@ public class SettingsServiceTests
             var loaded = await service.LoadSettingsAsync();
 
             Assert.NotNull(loaded);
-            Assert.Equal(5, loaded.PollingIntervalSeconds);
+            Assert.Equal(30, loaded.PollingIntervalSeconds);
             Assert.Equal(20.0, loaded.LowBatteryWarningThreshold);
             Assert.Equal(10.0, loaded.CriticalBatteryThreshold);
             Assert.Equal(80.0, loaded.HighChargeReminderThreshold);
             Assert.True(loaded.EnableNotifications);
             Assert.False(loaded.EnableDemoMode);
+            Assert.False(loaded.MinimizeToTray);
+            Assert.False(loaded.CloseToTray);
+            Assert.True(loaded.ShowTrayIcon);
+            Assert.False(loaded.StartAtLogin);
+            Assert.False(loaded.StartMinimized);
             Assert.True(File.Exists(tempFile));
         }
         finally
@@ -81,7 +86,11 @@ public class SettingsServiceTests
             var loaded = await service.LoadSettingsAsync();
 
             Assert.NotNull(loaded);
-            Assert.Equal(5, loaded.PollingIntervalSeconds);
+            Assert.Equal(30, loaded.PollingIntervalSeconds);
+            Assert.False(loaded.MinimizeToTray);
+            Assert.False(loaded.CloseToTray);
+            Assert.True(loaded.ShowTrayIcon);
+            Assert.False(loaded.StartAtLogin);
         }
         finally
         {

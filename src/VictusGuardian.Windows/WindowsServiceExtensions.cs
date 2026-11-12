@@ -3,7 +3,9 @@ using Microsoft.Extensions.DependencyInjection;
 using VictusGuardian.Core.Contracts;
 using VictusGuardian.Windows.Composite;
 using VictusGuardian.Windows.Native;
+using VictusGuardian.Windows.Notifications;
 using VictusGuardian.Windows.Power;
+using VictusGuardian.Windows.Startup;
 using VictusGuardian.Windows.Telemetry;
 
 namespace VictusGuardian.Windows;
@@ -24,6 +26,8 @@ public static class WindowsServiceExtensions
         services.AddSingleton<IWindowsIoctlBatteryReader, WindowsIoctlBatteryReader>();
         services.AddSingleton<IWindowsPowerStatusReader, WindowsPowerStatusReader>();
         services.AddSingleton<INativePowerEvents, WindowsPowerEventNotifier>();
+        services.AddSingleton<IWindowsStartupService, WindowsStartupService>();
+        services.AddSingleton<IWindowsDesktopNotificationService, WindowsDesktopNotificationService>();
         services.AddSingleton<WindowsBatteryTelemetryProvider>();
         services.AddSingleton<CompositeBatteryTelemetryProvider>();
         services.AddSingleton<ICompositeBatteryTelemetryProvider>(sp => sp.GetRequiredService<CompositeBatteryTelemetryProvider>());

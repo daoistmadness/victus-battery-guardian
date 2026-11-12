@@ -93,7 +93,7 @@ public class StartupAndReliabilityTests
             var settings = await settingsService.LoadSettingsAsync();
 
             Assert.NotNull(settings);
-            Assert.Equal(5, settings.PollingIntervalSeconds);
+            Assert.Equal(30, settings.PollingIntervalSeconds);
             Assert.Equal(20.0, settings.LowBatteryWarningThreshold);
             Assert.Equal(10.0, settings.CriticalBatteryThreshold);
         }
