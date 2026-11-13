@@ -114,10 +114,10 @@ public partial class App : Application
                 {
                     powerEvents.PowerStateChanged += change =>
                     {
-                        if (change == PowerStateChangeType.Resume)
+                        if (change is PowerStateChangeType.Resume or PowerStateChangeType.StatusChanged)
                         {
-                            AppLogger.LogInfo("System resumed from sleep. Triggering immediate battery telemetry refresh.");
-                            _ = mainWindowVm.Dashboard.RefreshTelemetryAsync();
+                            AppLogger.LogInfo($"Power state changed ({change}). Triggering immediate battery telemetry refresh.");
+                            _ = SafeInvokeOnUIThreadAsync(mainWindowVm.Dashboard.RefreshTelemetryAsync);
                         }
                     };
                 }
