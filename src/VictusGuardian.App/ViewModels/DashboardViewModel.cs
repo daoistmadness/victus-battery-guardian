@@ -28,7 +28,21 @@ public partial class DashboardViewModel : ViewModelBase, IDisposable
     private readonly IAppNotificationCoordinator? _notificationCoordinator;
     private CancellationTokenSource? _pollingCts;
     private bool _isDisposed;
-    private bool _isWindowVisible = true;
+    private volatile bool _isWindowVisible = true;
+    private volatile bool _lastReadingWasOnAc;
+    private int _isRefreshInProgress;
+    private int _refreshRequested;
+    private int _pollingIntervalSeconds = 30;
+    private bool _hasCachedUsageStats;
+    private DateTimeOffset _usageStatsCacheExpiresUtc;
+    private TimeSpan? _cachedHistoricalRuntime;
+    private bool _hasRecordedHealthObservation;
+    private double _lastHealthObservationFullCapacityMwh;
+    private int? _lastHealthObservationCycleCount;
+    private string? _lastHealthObservationSerialNumber;
+    private DateTimeOffset _healthObservationRetryAfterUtc;
+
+    private static readonly TimeSpan UsageStatsCacheDuration = TimeSpan.FromMinutes(10);
 
     public bool IsWindowVisible => _isWindowVisible;
     public event Action<BatteryReading>? ReadingUpdated;
@@ -38,9 +52,17 @@ public partial class DashboardViewModel : ViewModelBase, IDisposable
         if (_isWindowVisible != isVisible)
         {
             _isWindowVisible = isVisible;
+            if (_pollingCts != null)
+            {
+                StartAutoPolling(_pollingIntervalSeconds);
+            }
             if (isVisible)
             {
                 _ = RefreshTelemetryAsync();
+            }
+            else
+            {
+                IsBusy = false;
             }
         }
     }
@@ -144,43 +166,42 @@ public partial class DashboardViewModel : ViewModelBase, IDisposable
     public void StartAutoPolling(int? intervalSeconds = null)
     {
         _pollingCts?.Cancel();
-        _pollingCts = new CancellationTokenSource();
-        var token = _pollingCts.Token;
+        var pollingCts = new CancellationTokenSource();
+        _pollingCts = pollingCts;
+        var token = pollingCts.Token;
         var interval = intervalSeconds ?? _settingsService.CurrentSettings.PollingIntervalSeconds;
         interval = Math.Clamp(interval, 5, 120);
+        _pollingIntervalSeconds = interval;
 
         _ = Task.Run(async () =>
         {
-            using var timer = new PeriodicTimer(TimeSpan.FromSeconds(interval));
-            while (!token.IsCancellationRequested)
+            try
             {
-                try
+                while (!token.IsCancellationRequested)
                 {
-                    if (!await timer.WaitForNextTickAsync(token))
+                    try
+                    {
+                        var effectiveInterval = _isWindowVisible
+                            ? interval
+                            : Math.Max(interval, _lastReadingWasOnAc ? 60 : 120);
+                        await Task.Delay(TimeSpan.FromSeconds(effectiveInterval), token);
+                        await SafeInvokeOnUIThreadAsync(RefreshTelemetryAsync);
+                    }
+                    catch (OperationCanceledException)
+                    {
                         break;
-
-                    if (_isWindowVisible)
-                    {
-                        await SafeInvokeOnUIThreadAsync(async () =>
-                        {
-                            await RefreshTelemetryAsync();
-                        });
                     }
-                    else
+                    catch (Exception ex)
                     {
-                        await RefreshTelemetryAsync();
+                        AppLogger.LogWarning($"Auto-polling tick exception: {ex.Message}");
                     }
-                }
-                catch (OperationCanceledException)
-                {
-                    break;
-                }
-                catch (Exception ex)
-                {
-                    AppLogger.LogWarning($"Auto-polling tick exception: {ex.Message}");
                 }
             }
-        }, token);
+            finally
+            {
+                pollingCts.Dispose();
+            }
+        });
     }
 
     private static async Task SafeInvokeOnUIThreadAsync(Func<Task> action)
@@ -212,8 +233,12 @@ public partial class DashboardViewModel : ViewModelBase, IDisposable
     [RelayCommand]
     public async Task RefreshTelemetryAsync()
     {
-        if (IsBusy) return;
-        IsBusy = true;
+        if (Interlocked.Exchange(ref _isRefreshInProgress, 1) != 0)
+        {
+            Interlocked.Exchange(ref _refreshRequested, 1);
+            return;
+        }
+        if (_isWindowVisible) IsBusy = true;
 
         try
         {
@@ -274,28 +299,70 @@ public partial class DashboardViewModel : ViewModelBase, IDisposable
             // Battery Health Tracking
             try
             {
-                if (reading.FullChargeCapacityMwh.HasValue && reading.DesignCapacityMwh.HasValue)
+                if (reading.FullChargeCapacityMwh.HasValue && reading.DesignCapacityMwh.HasValue &&
+                    DateTimeOffset.UtcNow >= _healthObservationRetryAfterUtc)
                 {
-                    var healthRecord = new BatteryHealthRecord
+                    var fullCapacity = reading.FullChargeCapacityMwh.Value;
+                    int? cycleCount = reading.CycleCount.HasValue ? reading.CycleCount.Value : null;
+                    string? serialNumber = reading.SerialNumber.HasValue ? reading.SerialNumber.Value : null;
+                    var hasChanged = !_hasRecordedHealthObservation ||
+                        Math.Abs(_lastHealthObservationFullCapacityMwh - fullCapacity) >= 1.0 ||
+                        _lastHealthObservationCycleCount != cycleCount ||
+                        !string.Equals(_lastHealthObservationSerialNumber, serialNumber, StringComparison.OrdinalIgnoreCase);
+
+                    if (hasChanged)
                     {
-                        Timestamp = reading.Timestamp,
-                        FullChargeCapacityMwh = reading.FullChargeCapacityMwh.Value,
-                        DesignCapacityMwh = reading.DesignCapacityMwh.Value,
-                        CycleCount = reading.CycleCount.HasValue ? reading.CycleCount.Value : null,
-                        BatterySerialNumber = reading.SerialNumber.HasValue ? reading.SerialNumber.Value : null,
-                        BatteryName = reading.BatteryName.HasValue ? reading.BatteryName.Value : null,
-                        Chemistry = reading.Chemistry.HasValue ? reading.Chemistry.Value : null
-                    };
-                    await _historyRepository.RecordHealthObservationAsync(healthRecord);
+                        var healthRecord = new BatteryHealthRecord
+                        {
+                            Timestamp = reading.Timestamp,
+                            FullChargeCapacityMwh = fullCapacity,
+                            DesignCapacityMwh = reading.DesignCapacityMwh.Value,
+                            CycleCount = cycleCount,
+                            BatterySerialNumber = serialNumber,
+                            BatteryName = reading.BatteryName.HasValue ? reading.BatteryName.Value : null,
+                            Chemistry = reading.Chemistry.HasValue ? reading.Chemistry.Value : null
+                        };
+                        await _historyRepository.RecordHealthObservationAsync(healthRecord);
+                        _lastHealthObservationFullCapacityMwh = fullCapacity;
+                        _lastHealthObservationCycleCount = cycleCount;
+                        _lastHealthObservationSerialNumber = serialNumber;
+                        _hasRecordedHealthObservation = true;
+                        _healthObservationRetryAfterUtc = DateTimeOffset.MinValue;
+                    }
                 }
             }
             catch
             {
                 // Health tracking non-fatal
+                _healthObservationRetryAfterUtc = DateTimeOffset.UtcNow.AddMinutes(5);
             }
 
             // Notify status listeners / tray icon
+            _lastReadingWasOnAc = reading.IsAcConnected;
             ReadingUpdated?.Invoke(reading);
+
+            // Keep alerts and notifications current while the dashboard is hidden.
+            var alertSettings = new AlertRuleSettings
+            {
+                LowBatteryPercentage = _settingsService.CurrentSettings.LowBatteryWarningThreshold,
+                CriticalBatteryPercentage = _settingsService.CurrentSettings.CriticalBatteryThreshold,
+                MaxChargeTargetPercentage = _settingsService.CurrentSettings.HighChargeReminderThreshold,
+                EnableNotifications = _settingsService.CurrentSettings.EnableNotifications
+            };
+
+            var alerts = _alertEvaluator.Evaluate(reading, health, alertSettings);
+            if (_notificationCoordinator != null && alerts.Count > 0)
+            {
+                foreach (var alert in alerts)
+                {
+                    _ = _notificationCoordinator.DispatchAlertAsync(alert);
+                }
+            }
+
+            if (!_isWindowVisible)
+            {
+                return;
+            }
 
             // Update primary readings
             BatteryPercentage = reading.BatteryPercentage.HasValue
@@ -394,10 +461,17 @@ public partial class DashboardViewModel : ViewModelBase, IDisposable
                     // Fallback to usage history
                     try
                     {
-                        var stats = await _historyRepository.GetUsageStatisticsAsync(TimeSpan.FromHours(24));
-                        if (stats.EstimatedRuntimeFromHistory.HasValue)
+                        if (!_hasCachedUsageStats || DateTimeOffset.UtcNow >= _usageStatsCacheExpiresUtc)
                         {
-                            var histTs = stats.EstimatedRuntimeFromHistory.Value;
+                            var stats = await _historyRepository.GetUsageStatisticsAsync(TimeSpan.FromHours(24));
+                            _cachedHistoricalRuntime = stats.EstimatedRuntimeFromHistory;
+                            _usageStatsCacheExpiresUtc = DateTimeOffset.UtcNow + UsageStatsCacheDuration;
+                            _hasCachedUsageStats = true;
+                        }
+
+                        if (_cachedHistoricalRuntime.HasValue)
+                        {
+                            var histTs = _cachedHistoricalRuntime.Value;
                             EstimatedTimeRemainingText = $"~{(int)histTs.TotalHours}h {histTs.Minutes}m (Estimated from usage history)";
                         }
                         else
@@ -407,6 +481,9 @@ public partial class DashboardViewModel : ViewModelBase, IDisposable
                     }
                     catch
                     {
+                        _cachedHistoricalRuntime = null;
+                        _usageStatsCacheExpiresUtc = DateTimeOffset.UtcNow + UsageStatsCacheDuration;
+                        _hasCachedUsageStats = true;
                         EstimatedTimeRemainingText = "Insufficient data";
                     }
                 }
@@ -444,25 +521,6 @@ public partial class DashboardViewModel : ViewModelBase, IDisposable
             HealthPercentage = health.HealthPercentage;
             HealthRatingText = $"Reported Capacity Retention: {health.HealthPercentage:F0}% ({health.Rating})";
 
-            // Alerts evaluation
-            var alertSettings = new AlertRuleSettings
-            {
-                LowBatteryPercentage = _settingsService.CurrentSettings.LowBatteryWarningThreshold,
-                CriticalBatteryPercentage = _settingsService.CurrentSettings.CriticalBatteryThreshold,
-                MaxChargeTargetPercentage = _settingsService.CurrentSettings.HighChargeReminderThreshold,
-                EnableNotifications = _settingsService.CurrentSettings.EnableNotifications
-            };
-
-            var alerts = _alertEvaluator.Evaluate(reading, health, alertSettings);
-
-            if (_notificationCoordinator != null && alerts.Count > 0)
-            {
-                foreach (var alert in alerts)
-                {
-                    _ = _notificationCoordinator.DispatchAlertAsync(alert);
-                }
-            }
-
             ActiveAlerts.Clear();
             if (alerts.Count > 0)
             {
@@ -495,13 +553,21 @@ public partial class DashboardViewModel : ViewModelBase, IDisposable
         }
         catch (Exception ex)
         {
-            EstimatedTimeRemainingText = "Unavailable";
-            ActiveAlerts.Clear();
-            ActiveAlerts.Add($"❌ Telemetry read failure: {ex.Message}");
+            if (_isWindowVisible)
+            {
+                EstimatedTimeRemainingText = "Unavailable";
+                ActiveAlerts.Clear();
+                ActiveAlerts.Add($"❌ Telemetry read failure: {ex.Message}");
+            }
         }
         finally
         {
-            IsBusy = false;
+            if (_isWindowVisible) IsBusy = false;
+            Volatile.Write(ref _isRefreshInProgress, 0);
+            if (Interlocked.Exchange(ref _refreshRequested, 0) != 0 && !_isDisposed)
+            {
+                _ = SafeInvokeOnUIThreadAsync(RefreshTelemetryAsync);
+            }
         }
     }
 

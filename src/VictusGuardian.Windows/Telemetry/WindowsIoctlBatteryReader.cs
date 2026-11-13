@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -9,7 +10,10 @@ namespace VictusGuardian.Windows.Telemetry;
 
 public class WindowsIoctlBatteryReader : IWindowsIoctlBatteryReader
 {
+    private static readonly TimeSpan InformationRefreshInterval = TimeSpan.FromHours(1);
     private readonly INativeBatteryDeviceApi _nativeApi;
+    private readonly ConcurrentDictionary<string, BatteryMetadata> _batteryMetadataByPath = new(StringComparer.OrdinalIgnoreCase);
+    private IReadOnlyList<string>? _devicePaths;
     private uint? _lastKnownBatteryTag;
     private string? _lastKnownSerialNumber;
     private bool _wasTagReinitialized;
@@ -33,6 +37,8 @@ public class WindowsIoctlBatteryReader : IWindowsIoctlBatteryReader
         _lastKnownSerialNumber = null;
         _wasTagReinitialized = false;
         _hasHardwareIdentityChanged = false;
+        _devicePaths = null;
+        _batteryMetadataByPath.Clear();
     }
 
     public Task<BatteryReading> ReadTelemetryAsync(CancellationToken cancellationToken = default)
@@ -44,11 +50,12 @@ public class WindowsIoctlBatteryReader : IWindowsIoctlBatteryReader
             return Task.FromResult(CreateUnsupportedReading("Windows IOCTL unsupported on this OS"));
         }
 
-        var devicePaths = _nativeApi.EnumerateBatteryDevicePaths();
+        var devicePaths = _devicePaths ?? _nativeApi.EnumerateBatteryDevicePaths();
         if (devicePaths.Count == 0)
         {
             return Task.FromResult(CreateUnsupportedReading("No battery device interfaces discovered"));
         }
+        _devicePaths = devicePaths;
 
         BatteryReading? fallbackCandidate = null;
 
@@ -67,7 +74,30 @@ public class WindowsIoctlBatteryReader : IWindowsIoctlBatteryReader
                 continue;
             }
 
-            var infoSuccess = _nativeApi.QueryBatteryInformation(handle, tag, out var info);
+            BatteryMetadata? cachedMetadata = null;
+            if (_batteryMetadataByPath.TryGetValue(path, out var metadata) && metadata.BatteryTag == tag)
+            {
+                cachedMetadata = metadata;
+            }
+            var hasCachedMetadata = cachedMetadata != null;
+            var info = default(BATTERY_INFORMATION);
+            var infoSuccess = false;
+            var infoRefreshed = false;
+            if (hasCachedMetadata && DateTimeOffset.UtcNow - cachedMetadata!.InformationCapturedAt < InformationRefreshInterval)
+            {
+                info = cachedMetadata.Information;
+                infoSuccess = true;
+            }
+            else if (_nativeApi.QueryBatteryInformation(handle, tag, out info))
+            {
+                infoSuccess = true;
+                infoRefreshed = true;
+            }
+            else if (hasCachedMetadata)
+            {
+                info = cachedMetadata!.Information;
+                infoSuccess = true;
+            }
             var statusSuccess = _nativeApi.QueryBatteryStatus(handle, tag, out var status);
 
             if (!statusSuccess && !infoSuccess)
@@ -82,17 +112,45 @@ public class WindowsIoctlBatteryReader : IWindowsIoctlBatteryReader
             }
             _lastKnownBatteryTag = tag;
 
-            var serial = _nativeApi.QueryBatteryString(handle, tag, BatteryQueryInformationLevel.BatterySerialNumber);
-            if (!string.IsNullOrEmpty(serial))
+            string? serial;
+            string? deviceName;
+            string? manufacturer;
+            if (hasCachedMetadata)
             {
-                if (!string.IsNullOrEmpty(_lastKnownSerialNumber) && !string.Equals(_lastKnownSerialNumber, serial, StringComparison.OrdinalIgnoreCase))
+                serial = cachedMetadata!.SerialNumber;
+                deviceName = cachedMetadata.DeviceName;
+                manufacturer = cachedMetadata.Manufacturer;
+                if (infoRefreshed)
                 {
-                    _hasHardwareIdentityChanged = true;
+                    _batteryMetadataByPath[path] = cachedMetadata with
+                    {
+                        Information = info,
+                        InformationCapturedAt = DateTimeOffset.UtcNow
+                    };
                 }
-                _lastKnownSerialNumber = serial;
+            }
+            else
+            {
+                serial = _nativeApi.QueryBatteryString(handle, tag, BatteryQueryInformationLevel.BatterySerialNumber);
+                deviceName = _nativeApi.QueryBatteryString(handle, tag, BatteryQueryInformationLevel.BatteryDeviceName);
+                manufacturer = _nativeApi.QueryBatteryString(handle, tag, BatteryQueryInformationLevel.BatteryManufactureName);
+
+                if (!string.IsNullOrEmpty(serial))
+                {
+                    if (!string.IsNullOrEmpty(_lastKnownSerialNumber) && !string.Equals(_lastKnownSerialNumber, serial, StringComparison.OrdinalIgnoreCase))
+                    {
+                        _hasHardwareIdentityChanged = true;
+                    }
+                    _lastKnownSerialNumber = serial;
+                }
+
+                if (infoSuccess)
+                {
+                    _batteryMetadataByPath[path] = new BatteryMetadata(tag, info, DateTimeOffset.UtcNow, serial, deviceName, manufacturer);
+                }
             }
 
-            var reading = ParseBatteryReading(path, tag, handle, infoSuccess ? info : null, statusSuccess ? status : null, serial);
+            var reading = ParseBatteryReading(path, tag, infoSuccess ? info : null, statusSuccess ? status : null, serial, deviceName, manufacturer);
 
             // If this is identified as the system battery, return immediately
             if (infoSuccess && (info.Capabilities & BatteryNativeConstants.BATTERY_SYSTEM_BATTERY) != 0)
@@ -108,16 +166,19 @@ public class WindowsIoctlBatteryReader : IWindowsIoctlBatteryReader
             return Task.FromResult(fallbackCandidate);
         }
 
+        _devicePaths = null;
+        _batteryMetadataByPath.Clear();
         return Task.FromResult(CreateUnsupportedReading("Unable to query active battery on any enumerated interface"));
     }
 
     private BatteryReading ParseBatteryReading(
         string devicePath,
         uint tag,
-        SafeBatteryHandle handle,
         BATTERY_INFORMATION? info,
         BATTERY_STATUS? status,
-        string? serialNumber)
+        string? serialNumber,
+        string? deviceName,
+        string? manufacturer)
     {
         var capabilities = SensorCapabilities.None;
 
@@ -253,10 +314,7 @@ public class WindowsIoctlBatteryReader : IWindowsIoctlBatteryReader
 
         // 7. Identity & Metadata
         var chemistry = info.HasValue ? TelemetryValue<string>.Reported(info.Value.GetChemistryString()) : TelemetryValue<string>.Unavailable;
-        var devName = _nativeApi.QueryBatteryString(handle, tag, BatteryQueryInformationLevel.BatteryDeviceName);
-        var mfgName = _nativeApi.QueryBatteryString(handle, tag, BatteryQueryInformationLevel.BatteryManufactureName);
-
-        if (!string.IsNullOrEmpty(devName) || !string.IsNullOrEmpty(mfgName) || !string.IsNullOrEmpty(serialNumber))
+        if (!string.IsNullOrEmpty(deviceName) || !string.IsNullOrEmpty(manufacturer) || !string.IsNullOrEmpty(serialNumber))
         {
             capabilities |= SensorCapabilities.BatteryIdentity;
         }
@@ -274,8 +332,8 @@ public class WindowsIoctlBatteryReader : IWindowsIoctlBatteryReader
             ChargeRateMilliwatts = rate,
             VoltageMillivolts = voltage,
             CycleCount = cycles,
-            BatteryName = !string.IsNullOrEmpty(devName) ? TelemetryValue<string>.Reported(devName) : TelemetryValue<string>.Unavailable,
-            Manufacturer = !string.IsNullOrEmpty(mfgName) ? TelemetryValue<string>.Reported(mfgName) : TelemetryValue<string>.Unavailable,
+            BatteryName = !string.IsNullOrEmpty(deviceName) ? TelemetryValue<string>.Reported(deviceName) : TelemetryValue<string>.Unavailable,
+            Manufacturer = !string.IsNullOrEmpty(manufacturer) ? TelemetryValue<string>.Reported(manufacturer) : TelemetryValue<string>.Unavailable,
             SerialNumber = !string.IsNullOrEmpty(serialNumber) ? TelemetryValue<string>.Reported(serialNumber) : TelemetryValue<string>.Unavailable,
             Chemistry = chemistry,
             BatteryTag = tag,
@@ -284,6 +342,14 @@ public class WindowsIoctlBatteryReader : IWindowsIoctlBatteryReader
             TelemetryProviderSource = "Windows IOCTL (Direct Device Interface)"
         };
     }
+
+    private sealed record BatteryMetadata(
+        uint BatteryTag,
+        BATTERY_INFORMATION Information,
+        DateTimeOffset InformationCapturedAt,
+        string? SerialNumber,
+        string? DeviceName,
+        string? Manufacturer);
 
     private static BatteryReading CreateUnsupportedReading(string reason) => new()
     {
